@@ -49,3 +49,43 @@ async def test_health_returns_503_when_loading(mock_model):
     assert response.status_code == 503
     data = response.json()
     assert data["status"] == "loading"
+
+
+import numpy as np
+
+
+async def test_embed_documents(client, mock_model):
+    mock_model.encode.return_value = np.array([[0.1] * 1024, [0.2] * 1024])
+    response = await client.post("/embed", json={
+        "texts": ["Kinh tế Việt Nam", "Lạm phát tăng"],
+        "is_query": False,
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["embeddings"]) == 2
+    assert len(data["embeddings"][0]) == 1024
+    mock_model.encode.assert_called_once()
+    # Document encoding: no prompt_name
+    call_kwargs = mock_model.encode.call_args
+    assert "prompt_name" not in call_kwargs.kwargs or call_kwargs.kwargs.get("prompt_name") is None
+
+
+async def test_embed_queries(client, mock_model):
+    mock_model.encode.return_value = np.array([[0.5] * 1024])
+    response = await client.post("/embed", json={
+        "texts": ["GDP Việt Nam 2024"],
+        "is_query": True,
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["embeddings"]) == 1
+    call_kwargs = mock_model.encode.call_args
+    assert call_kwargs.kwargs.get("prompt_name") == "query"
+
+
+async def test_embed_empty_texts(client, mock_model):
+    response = await client.post("/embed", json={
+        "texts": [],
+        "is_query": False,
+    })
+    assert response.status_code == 422 or response.status_code == 400
