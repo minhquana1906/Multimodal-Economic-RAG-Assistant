@@ -5,7 +5,13 @@ from httpx import AsyncClient, ASGITransport
 
 @pytest.fixture
 def mock_reranker():
-    """Mock transformers model and tokenizer."""
+    """Mock transformers model and tokenizer.
+
+    Patching at `app.*` works because the `client` fixture calls
+    `importlib.reload(app)` — this re-executes the module's top-level
+    imports, and the patches are already in place at that point, so the
+    reloaded module picks up the mocks rather than the real classes.
+    """
     with patch("app.AutoModelForCausalLM") as mock_model_cls, \
          patch("app.AutoTokenizer") as mock_tok_cls:
         mock_model = MagicMock()
@@ -31,8 +37,15 @@ async def client(mock_reranker):
         yield c
 
 
-@pytest.mark.asyncio
 async def test_health_returns_200(client):
     response = await client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+async def test_health_returns_503_when_loading(client):
+    import app
+    app.model = None
+    response = await client.get("/health")
+    assert response.status_code == 503
+    assert response.json() == {"status": "loading"}

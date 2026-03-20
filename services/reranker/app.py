@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
@@ -12,13 +11,13 @@ import torch
 MODEL_NAME = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
 model = None
 tokenizer = None
-token_true_id: int = 0
-token_false_id: int = 0
+token_true_id: int | None = None
+token_false_id: int | None = None
 
 # Chat template wrapping — required for correct logits
 PREFIX = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
 SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
-INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
+INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"  # Used in /rerank endpoint (Task 4)
 
 
 @asynccontextmanager
