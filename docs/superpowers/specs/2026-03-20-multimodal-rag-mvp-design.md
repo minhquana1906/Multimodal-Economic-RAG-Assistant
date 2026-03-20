@@ -287,7 +287,7 @@ QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION=econ_vn_news
 RETRIEVAL_TOP_K=20
 RERANK_TOP_N=5
-APOLOGY_MESSAGE="Xin loi, toi khong the tra loi cau hoi nay."
+APOLOGY_MESSAGE="Xin lỗi, tôi không thể trả lời câu hỏi này vì nó có vẻ không an toàn hoặc vi phạm chính sách nội dung của chúng tôi."
 GUARD_TIMEOUT_S=10
 LLM_TIMEOUT_S=60
 EMBEDDING_TIMEOUT_S=15
@@ -321,7 +321,7 @@ doc_embeddings = model.encode(documents)
 - **Library:** `transformers` with `AutoModelForCausalLM`
 - **API:** `POST /rerank` → `{ "query": "...", "passages": ["..."] }` → `{ "scores": [0.92, ...] }`
 - **Not** a classical cross-encoder. Uses yes/no token logits to compute relevance.
-- **Hardcoded instruction:** `"Cho mot cau hoi ve kinh te tai chinh, danh gia muc do lien quan cua doan van ban voi cau hoi."`
+- **Hardcoded instruction:** `"Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"`
 
 **Critical:** Input must be wrapped in the model's chat template with a system judge prompt and thinking-suppression suffix. The full input preparation:
 
@@ -337,7 +337,7 @@ token_false_id = tokenizer.convert_tokens_to_ids("no")
 # Chat template wrapping — required for correct logits
 PREFIX = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
 SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
-INSTRUCTION = "Cho mot cau hoi ve kinh te tai chinh, danh gia muc do lien quan cua doan van ban voi cau hoi."
+INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
 
 def format_pair(query: str, document: str) -> str:
     body = f"<Instruct>: {INSTRUCTION}\n<Query>: {query}\n<Document>: {document}"
