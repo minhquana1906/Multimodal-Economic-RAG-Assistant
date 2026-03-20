@@ -1,0 +1,52 @@
+sequenceDiagram
+    participant U as User
+    participant UI as Open WebUI
+    participant API as FastAPI
+    participant G as Qwen3Guard
+    participant ASR as Qwen3-ASR
+    participant VLM as Qwen3-VL
+    participant RET as Retriever/Qdrant
+    participant R as Reranker
+    participant LLM as Qwen3.5-4B
+
+    U->>UI: Send text/audio/image
+    UI->>API: Request
+
+    alt Audio
+        API->>ASR: Transcribe audio
+        ASR-->>API: Transcript
+    end
+
+    alt Image/Chart
+        API->>VLM: Analyze image/chart
+        VLM-->>API: Structured text summary
+    end
+
+    API->>G: Check input safety
+    G-->>API: safe / unsafe
+
+    alt Input unsafe
+        API-->>UI: Default apology
+    else Input safe
+        API->>RET: Hybrid retrieve
+        RET-->>API: Top-k chunks
+        API->>R: Rerank
+        R-->>API: Ranked context
+        API->>LLM: Generate answer
+        LLM-->>API: Draft answer
+        API->>G: Check output safety
+        G-->>API: safe / unsafe
+
+        alt Output unsafe
+            API->>LLM: Retry with safety feedback
+            LLM-->>API: New answer
+            API->>G: Re-check output
+            G-->>API: safe / unsafe
+        end
+
+        alt Final safe
+            API-->>UI: Answer + citations
+        else Final unsafe
+            API-->>UI: Default apology
+        end
+    end
