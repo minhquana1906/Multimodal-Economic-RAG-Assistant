@@ -1,0 +1,10 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+httpx==0.28.1
+qdrant-client==1.14.2
+openai==1.82.0
+tavily-python==0.5.1
+pydantic==2.11.3
+pydantic-settings==2.9.1
+underthesea==6.8.4
+fastembed==0.6.1
