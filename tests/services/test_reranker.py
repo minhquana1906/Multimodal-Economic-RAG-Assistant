@@ -49,3 +49,46 @@ async def test_health_returns_503_when_loading(client):
     response = await client.get("/health")
     assert response.status_code == 503
     assert response.json() == {"status": "loading"}
+
+
+import torch
+
+
+async def test_rerank_returns_scores(client, mock_reranker):
+    mock_model, mock_tokenizer = mock_reranker
+    # Mock tokenizer to return tensor-like dict
+    mock_inputs = {"input_ids": torch.tensor([[1, 2, 3]])}
+    mock_tokenizer.return_value = MagicMock(**{
+        "to.return_value": mock_inputs,
+        **mock_inputs,
+    })
+    mock_tokenizer.side_effect = None
+    mock_tokenizer.__call__ = MagicMock(return_value=MagicMock(**{
+        "to.return_value": mock_inputs,
+    }))
+
+    # Mock model output: logits where yes > no → score > 0.5
+    mock_logits = torch.zeros(1, 3, 50000)
+    mock_logits[0, -1, 9891] = 2.0  # yes token
+    mock_logits[0, -1, 2822] = 0.5  # no token
+    mock_output = MagicMock()
+    mock_output.logits = mock_logits
+    mock_model.return_value = mock_output
+    mock_model.device = torch.device("cpu")
+
+    response = await client.post("/rerank", json={
+        "query": "GDP Việt Nam",
+        "passages": ["GDP tăng 7%"],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["scores"]) == 1
+    assert data["scores"][0] > 0.5
+
+
+async def test_rerank_empty_passages(client, mock_reranker):
+    response = await client.post("/rerank", json={
+        "query": "GDP",
+        "passages": [],
+    })
+    assert response.status_code == 422 or response.status_code == 400

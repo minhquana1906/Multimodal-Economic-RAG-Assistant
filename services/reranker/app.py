@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
@@ -46,3 +47,36 @@ async def health():
     if model is None:
         return JSONResponse({"status": "loading"}, status_code=503)
     return JSONResponse({"status": "ok"})
+
+
+class RerankRequest(BaseModel):
+    query: str
+    passages: list[str] = Field(..., min_length=1)
+
+
+class RerankResponse(BaseModel):
+    scores: list[float]
+
+
+def format_pair(query: str, document: str) -> str:
+    body = f"<Instruct>: {INSTRUCTION}\n<Query>: {query}\n<Document>: {document}"
+    return PREFIX + body + SUFFIX
+
+
+@app.post("/rerank", response_model=RerankResponse)
+async def rerank(request: RerankRequest):
+    if model is None or tokenizer is None:
+        return JSONResponse({"detail": "Model is still loading"}, status_code=503)
+    # Note: passages are scored sequentially. For high-throughput production,
+    # consider batching all passages in a single forward pass.
+    scores = []
+    for passage in request.passages:
+        formatted = format_pair(request.query, passage)
+        inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(model.device)
+        with torch.no_grad():
+            logits = model(**inputs).logits[:, -1, :]
+            true_score = logits[:, token_true_id].exp().item()
+            false_score = logits[:, token_false_id].exp().item()
+            relevance = true_score / (true_score + false_score)
+        scores.append(relevance)
+    return RerankResponse(scores=scores)
