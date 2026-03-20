@@ -40,6 +40,8 @@ class EmbedResponse(BaseModel):
 
 @app.post("/embed", response_model=EmbedResponse)
 async def embed(request: EmbedRequest):
+    if model is None:
+        return JSONResponse({"detail": "Model is still loading"}, status_code=503)
     if request.is_query:
         vectors = model.encode(request.texts, prompt_name="query")
     else:

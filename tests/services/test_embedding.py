@@ -1,5 +1,6 @@
 import importlib
 
+import numpy as np
 import pytest
 from httpx import ASGITransport, AsyncClient
 from unittest.mock import MagicMock, patch
@@ -51,9 +52,6 @@ async def test_health_returns_503_when_loading(mock_model):
     assert data["status"] == "loading"
 
 
-import numpy as np
-
-
 async def test_embed_documents(client, mock_model):
     mock_model.encode.return_value = np.array([[0.1] * 1024, [0.2] * 1024])
     response = await client.post("/embed", json={
@@ -79,6 +77,7 @@ async def test_embed_queries(client, mock_model):
     assert response.status_code == 200
     data = response.json()
     assert len(data["embeddings"]) == 1
+    assert len(data["embeddings"][0]) == 1024
     call_kwargs = mock_model.encode.call_args
     assert call_kwargs.kwargs.get("prompt_name") == "query"
 
@@ -88,4 +87,4 @@ async def test_embed_empty_texts(client, mock_model):
         "texts": [],
         "is_query": False,
     })
-    assert response.status_code == 422 or response.status_code == 400
+    assert response.status_code == 422
