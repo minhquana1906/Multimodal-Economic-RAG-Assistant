@@ -8,3 +8,19 @@ wheels/
 
 # Virtual environments
 .venv
+
+superpowers/
+docs/superpowers/
+
+# Environment
+.env
+
+# Docker
+docker-compose.override.yml
+
+# Qdrant local data
+qdrant_storage/
+
+# Model cache
+models/
+.cache/
