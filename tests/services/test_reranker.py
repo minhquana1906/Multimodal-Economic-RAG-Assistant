@@ -1,4 +1,5 @@
 import pytest
+import torch
 from unittest.mock import patch, MagicMock
 from httpx import AsyncClient, ASGITransport
 
@@ -51,18 +52,10 @@ async def test_health_returns_503_when_loading(client):
     assert response.json() == {"status": "loading"}
 
 
-import torch
-
-
 async def test_rerank_returns_scores(client, mock_reranker):
     mock_model, mock_tokenizer = mock_reranker
     # Mock tokenizer to return tensor-like dict
     mock_inputs = {"input_ids": torch.tensor([[1, 2, 3]])}
-    mock_tokenizer.return_value = MagicMock(**{
-        "to.return_value": mock_inputs,
-        **mock_inputs,
-    })
-    mock_tokenizer.side_effect = None
     mock_tokenizer.__call__ = MagicMock(return_value=MagicMock(**{
         "to.return_value": mock_inputs,
     }))
@@ -91,4 +84,4 @@ async def test_rerank_empty_passages(client, mock_reranker):
         "query": "GDP",
         "passages": [],
     })
-    assert response.status_code == 422 or response.status_code == 400
+    assert response.status_code == 422

@@ -67,16 +67,22 @@ def format_pair(query: str, document: str) -> str:
 async def rerank(request: RerankRequest):
     if model is None or tokenizer is None:
         return JSONResponse({"detail": "Model is still loading"}, status_code=503)
-    # Note: passages are scored sequentially. For high-throughput production,
-    # consider batching all passages in a single forward pass.
-    scores = []
-    for passage in request.passages:
+
+    def _score_passage(passage: str) -> float:
         formatted = format_pair(request.query, passage)
         inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(model.device)
         with torch.no_grad():
             logits = model(**inputs).logits[:, -1, :]
             true_score = logits[:, token_true_id].exp().item()
             false_score = logits[:, token_false_id].exp().item()
-            relevance = true_score / (true_score + false_score)
-        scores.append(relevance)
+            if (true_score + false_score) == 0:
+                return 0.5  # fallback when underflow occurs
+            return true_score / (true_score + false_score)
+
+    # Note: passages are scored sequentially. For high-throughput production,
+    # consider batching all passages in a single forward pass.
+    scores = []
+    for passage in request.passages:
+        score = await asyncio.to_thread(_score_passage, passage)
+        scores.append(score)
     return RerankResponse(scores=scores)
