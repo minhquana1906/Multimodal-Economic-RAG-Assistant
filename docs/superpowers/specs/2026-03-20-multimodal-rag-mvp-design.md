@@ -34,10 +34,12 @@ Phase 3 adds: `vlm` (port 8006, remote GPU, `transformers`).
 
 ### 2.3 Model Placement
 
+> **VRAM note:** Estimates below reflect weight size only. Allow ~1.5–2 GB additional overhead for CUDA contexts and inference buffers (each container creates its own CUDA context at ~300–500 MB). Phase 1 realistic total: ~5–6 GB on 12 GB. Phase 1+2 combined: ~9–10 GB — feasible but tight. Consider `CUDA_VISIBLE_DEVICES` pinning or sequential loading if OOM occurs.
+
 **Local RTX 3060 (12GB):**
 
-| Model | VRAM (approx) | Library |
-|-------|---------------|---------|
+| Model | VRAM (weights) | Library |
+|-------|----------------|---------|
 | Qwen3-Embedding-0.6B | ~1.2 GB | sentence-transformers |
 | Qwen3-Reranker-0.6B | ~1.2 GB | transformers (AutoModelForCausalLM) |
 | Qwen3Guard-Gen-0.6B | ~1.2 GB | transformers (AutoModelForCausalLM) |
@@ -45,8 +47,8 @@ Phase 3 adds: `vlm` (port 8006, remote GPU, `transformers`).
 
 **Remote GPU (vast.ai):**
 
-| Model | VRAM (approx) | Library |
-|-------|---------------|---------|
+| Model | VRAM (weights) | Library |
+|-------|----------------|---------|
 | Qwen3.5-4B | ~8 GB | vLLM |
 | Qwen3-VL-4B-Instruct (Phase 3) | ~8 GB | transformers (Qwen3VLForConditionalGeneration) |
 
@@ -79,6 +81,8 @@ Each article produces 1+ chunks:
 | `title_lead` | `title` + first paragraph of `content` | Broad topic matching |
 | `body_paragraph` | Each subsequent paragraph (min 50 chars) | Granular fact retrieval |
 
+**Short paragraph handling:** Paragraphs under 50 characters are merged with the preceding paragraph. If the first body paragraph is under 50 chars, it is merged into the `title_lead` chunk.
+
 All chunks from one article share a deterministic `article_id` (hash of `url`).
 
 ### 3.3 Qdrant Collection Schema
@@ -106,9 +110,25 @@ Payload:
 ### 3.4 Hybrid Retrieval
 
 1. Encode query → dense vector via Embedding service (with `prompt_name="query"`)
-2. Encode query → sparse vector via BM25/sparse encoder
-3. Qdrant `query` with `prefetch` for both dense and sparse, fused via Reciprocal Rank Fusion (RRF)
-4. Return top-k (default k=20) candidates to reranker
+2. Encode query → sparse vector via Qdrant's built-in BM25 (see §3.4.1)
+3. Qdrant `query` with `prefetch` for both dense and sparse, fused via Reciprocal Rank Fusion (RRF) using Qdrant's default `k=60`
+4. Prefetch counts: top-40 dense + top-40 sparse → RRF fusion → return top-20 candidates to reranker
+
+#### 3.4.1 Sparse Retrieval
+
+**Method:** Qdrant's built-in BM25 sparse vector index via `qdrant_client`. When creating the collection, configure a `sparse_vectors` named `"sparse"` with `models.SparseVectorParams(modifier=models.Modifier.IDF)`.
+
+**Vietnamese tokenization:** Use `underthesea` library (`word_tokenize`) to segment Vietnamese text before BM25 tokenization. Vietnamese is not whitespace-delimited at the word level, so raw splitting produces incorrect terms. The tokenizer runs both at ingestion time (on each chunk's text) and at query time (on the user query).
+
+**Ingestion flow:**
+1. For each chunk: segment text with `underthesea.word_tokenize(text)`
+2. Build sparse vector using `fastembed` with the `Qdrant/bm25` model (which accepts pre-tokenized text)
+3. Upload both dense and sparse vectors together in a single upsert batch
+
+**Query flow:**
+1. Segment query with `underthesea.word_tokenize(query)`
+2. Encode via the same `Qdrant/bm25` sparse model
+3. Pass sparse vector to Qdrant prefetch alongside the dense vector
 
 ### 3.5 Ingestion Script
 
@@ -116,7 +136,8 @@ Payload:
 - Loads dataset via `datasets` library from Hugging Face
 - Chunks articles per the semantic strategy
 - Batches embeddings through the Embedding service (batch size ~256)
-- Inserts into Qdrant with full payload
+- Generates sparse vectors via `fastembed` with `Qdrant/bm25` model (Vietnamese text pre-tokenized with `underthesea`)
+- Inserts both dense + sparse vectors into Qdrant with full payload
 - Idempotent: checks if collection exists with expected point count before re-ingesting
 - Estimated time: ~30–45 min for 308K articles on the 3060
 
@@ -144,35 +165,91 @@ orchestrator/
 
 ### 4.2 RAG Pipeline
 
+**Conversation history:** Only the last `user` message is used as the retrieval query. Previous conversation turns are discarded (stateless RAG for Phase 1 MVP).
+
+**Pipeline steps:**
+
 ```
-1. Extract user message text from OpenAI-format request
+1. Extract the last user message from the OpenAI-format messages array
 2. Guard check (input) → if unsafe: return apology immediately
 3. Embed query → hybrid retrieve from Qdrant (top-20) → rerank (top-5)
-4. Build prompt: system prompt + retrieved chunks with citations + user query
-5. Generate answer via LLM (full response, not streaming)
-6. Guard check (output):
+4. If retrieval returns 0 results → return "Xin loi, toi khong tim thay thong tin lien quan trong co so du lieu." without calling LLM
+5. Build prompt from template (see §4.2.1)
+6. Generate answer via LLM (full response, not streaming)
+7. Guard check (output):
    → safe: proceed
-   → unsafe: retry once with safety feedback appended to prompt
+   → unsafe: retry once with safety feedback (see §4.2.2) appended to prompt
    → still unsafe: return apology
-7. Simulate streaming: chunk the final safe answer and yield SSE tokens
+8. Simulate streaming: split final answer on whitespace, yield each word as an SSE data chunk with ~15ms inter-chunk delay. Citations are appended as a single final chunk.
 ```
 
-### 4.3 Open WebUI Integration
+#### 4.2.1 LLM System Prompt and RAG Prompt Template
 
-Open WebUI connects to FastAPI as an OpenAI-compatible backend via `POST /v1/chat/completions` with `stream: true`. Open WebUI is configured to point at `http://orchestrator:8000` as its only backend. It acts purely as a frontend shell — no plugins, no custom logic.
+**System prompt:**
 
-### 4.4 Citation Format
+```
+Ban la tro ly chuyen gia ve kinh te va tai chinh Viet Nam. Nhiem vu cua ban la tra loi cau hoi cua nguoi dung dua tren cac bai bao duoc cung cap ben duoi.
 
-Appended to every answer:
+Quy tac:
+- Chi tra loi bang tieng Viet.
+- Chi su dung thong tin tu cac bai bao duoc cung cap. Khong su dung kien thuc ben ngoai.
+- Neu cac bai bao khong chua du thong tin de tra loi, hay noi ro rang ban khong tim thay thong tin lien quan.
+- Trich dan nguon bang so thu tu [1], [2], ... tuong ung voi cac bai bao ben duoi.
+- Tra loi ngan gon, chinh xac, di thang vao van de.
+```
+
+**User prompt template:**
+
+```
+Ngu canh tu co so du lieu:
+
+[1] {title_1} — {source_1}, {published_date_1}
+{chunk_text_1}
+
+[2] {title_2} — {source_2}, {published_date_2}
+{chunk_text_2}
+
+...
+
+---
+Cau hoi: {user_query}
+```
+
+Chunks are ordered by reranker score (highest first). Each chunk includes title, source, date, and the chunk text.
+
+**Citation block** (appended to LLM answer by the orchestrator, not generated by the LLM):
 
 ```
 ---
 Nguon tham khao:
-[1] <title> — <source>, <published_date> — <url>
-[2] ...
+[1] {title_1} — {source_1}, {published_date_1} — {url_1}
+[2] {title_2} — {source_2}, {published_date_2} — {url_2}
 ```
 
-### 4.5 Configuration (env vars)
+#### 4.2.2 Safety Retry Feedback
+
+When the output guard flags a generated answer as unsafe, the orchestrator appends this feedback to the prompt and retries generation once:
+
+```
+Phan hoi truoc do bi danh gia la khong an toan. Vui long tra loi lai mot cach trung lap, chi dua tren thong tin trong ngu canh duoc cung cap. Khong dua ra y kien ca nhan hay noi dung gay tranh cai.
+```
+
+### 4.3 Open WebUI Integration
+
+Open WebUI connects to FastAPI as an OpenAI-compatible backend via `POST /v1/chat/completions` with `stream: true`. It acts purely as a frontend shell — no plugins, no custom logic.
+
+**Open WebUI env vars (in docker-compose.yml):**
+
+```
+OPENAI_API_BASE_URL=http://orchestrator:8000/v1
+OPENAI_API_KEY=dummy                    # required by WebUI but not validated by orchestrator
+ENABLE_RAG_WEB_SEARCH=false             # disable built-in RAG — ours is in FastAPI
+ENABLE_IMAGE_GENERATION=false
+WEBUI_AUTH=false                        # no login for Phase 1 demo
+DEFAULT_MODELS=multimodal-rag           # the model name orchestrator advertises
+```
+
+### 4.4 Configuration (env vars)
 
 ```
 EMBEDDING_URL=http://embedding:8001
@@ -216,28 +293,52 @@ doc_embeddings = model.encode(documents)
 - **Model:** `Qwen/Qwen3-Reranker-0.6B`
 - **Library:** `transformers` with `AutoModelForCausalLM`
 - **API:** `POST /rerank` → `{ "query": "...", "passages": ["..."] }` → `{ "scores": [0.92, ...] }`
-- **Not** a classical cross-encoder. Uses yes/no token logits to compute relevance:
+- **Not** a classical cross-encoder. Uses yes/no token logits to compute relevance.
+- **Hardcoded instruction:** `"Cho mot cau hoi ve kinh te tai chinh, danh gia muc do lien quan cua doan van ban voi cau hoi."`
+
+**Critical:** Input must be wrapped in the model's chat template with a system judge prompt and thinking-suppression suffix. The full input preparation:
 
 ```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Reranker-0.6B", padding_side='left')
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-Reranker-0.6B").eval()
+
 token_true_id = tokenizer.convert_tokens_to_ids("yes")
 token_false_id = tokenizer.convert_tokens_to_ids("no")
 
-# Format: <Instruct>: ...\n<Query>: ...\n<Document>: ...
-logits = model(**inputs).logits[:, -1, :]
-true_score = logits[:, token_true_id].exp().item()
-false_score = logits[:, token_false_id].exp().item()
-relevance_score = true_score / (true_score + false_score)
+# Chat template wrapping — required for correct logits
+PREFIX = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
+SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
+INSTRUCTION = "Cho mot cau hoi ve kinh te tai chinh, danh gia muc do lien quan cua doan van ban voi cau hoi."
+
+def format_pair(query: str, document: str) -> str:
+    body = f"<Instruct>: {INSTRUCTION}\n<Query>: {query}\n<Document>: {document}"
+    return PREFIX + body + SUFFIX
+
+# For each (query, document) pair:
+formatted = format_pair(query, document)
+inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(model.device)
+with torch.no_grad():
+    logits = model(**inputs).logits[:, -1, :]
+    true_score = logits[:, token_true_id].exp().item()
+    false_score = logits[:, token_false_id].exp().item()
+    relevance_score = true_score / (true_score + false_score)
 ```
+
+Without the `PREFIX`/`SUFFIX` wrapping (especially the `<think>\n\n</think>\n\n` to suppress thinking mode), the model produces incorrect logits.
 
 ### 5.3 Guard Service
 
 - **Model:** `Qwen/Qwen3Guard-Gen-0.6B`
 - **Library:** `transformers` with `AutoModelForCausalLM`
-- **API:** `POST /classify` → `{ "text": "...", "role": "input"|"output", "context": "..." }` → `{ "label": "safe"|"unsafe" }`
+- **API:**
+  - Input moderation: `POST /classify` → `{ "text": "user query", "role": "input" }` → `{ "label": "safe"|"unsafe" }`
+  - Output moderation: `POST /classify` → `{ "text": "llm answer", "role": "output", "prompt": "original user query" }` → `{ "label": "safe"|"unsafe" }`
 
 **Input moderation:** Format as `[{"role": "user", "content": text}]`, apply chat template, generate up to 128 tokens.
 
-**Output moderation:** Format as `[{"role": "user", "content": prompt}, {"role": "assistant", "content": answer}]`.
+**Output moderation:** Format as `[{"role": "user", "content": prompt}, {"role": "assistant", "content": text}]`, apply chat template, generate up to 128 tokens. The `prompt` field provides the original user query as context for judging the response.
 
 Parse output: look for `Safety: Safe` / `Safety: Unsafe` / `Safety: Controversial`. Anything non-`Safe` is treated as unsafe.
 
@@ -249,27 +350,19 @@ Parse output: look for `Safety: Safe` / `Safety: Unsafe` / `Safety: Controversia
 - **Thinking mode disabled** for RAG answers: `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`
 - System prompt enforces Vietnamese-only answers with citation format.
 
+---
+
+> **Below this line: future phase references — NOT in Phase 1 scope.**
+
 ### 5.5 ASR Service (Phase 2)
 
-- **Model:** `Qwen/Qwen3-ASR-1.7B`
-- **Library:** `qwen-asr` (`pip install qwen-asr`)
-- **API:** `POST /transcribe` → multipart audio file → `{ "transcript": "...", "language": "vi" }`
+- **Model:** `Qwen/Qwen3-ASR-1.7B` via `qwen-asr` package. Port 8005, local GPU.
+- Full implementation details deferred to Phase 2 spec.
 
-```python
-from qwen_asr import Qwen3ASRModel
+### 5.6 VLM Service (Phase 3)
 
-model = Qwen3ASRModel.from_pretrained("Qwen/Qwen3-ASR-1.7B", dtype=torch.bfloat16, device_map="cuda:0")
-results = model.transcribe(audio=audio_path, language=None)
-```
-
-Accepts: local file paths, URLs, base64 data, numpy arrays.
-
-### 5.6 VLM Service (Phase 3, Remote)
-
-- **Model:** `Qwen/Qwen3-VL-4B-Instruct`
-- **Library:** `transformers` with `Qwen3VLForConditionalGeneration` + `AutoProcessor` (vLLM support not confirmed)
-- **API:** `POST /analyze-image` → `{ "image_b64": "..." }` → `{ "summary": "..." }`
-- Prompt instructs the model to extract structured facts from charts/images (not free-form VQA). The summary is used as a grounded text query for retrieval.
+- **Model:** `Qwen/Qwen3-VL-4B-Instruct` via `transformers`. Port 8006, remote GPU.
+- Full implementation details deferred to Phase 3 spec.
 
 ## 6. Docker Compose & Infrastructure
 
@@ -294,6 +387,8 @@ services:
 - Qdrant mounts `qdrant_storage:/qdrant/storage` for persistence
 - `HUGGING_FACE_HUB_TOKEN` injected via `.env` for model downloads
 - Phase 2/3 services use Docker Compose `profiles` (`audio`, `vision`) — opt-in via `docker compose --profile audio up`
+
+**Health checks:** Every model service exposes `GET /health` that returns HTTP 200 only after weights are loaded and the model is ready to serve. Docker Compose `healthcheck` directives use this with `interval: 10s`, `start_period: 120s` (GPU models take 30–120s to load). The `orchestrator` service uses `depends_on` with `condition: service_healthy` for `embedding`, `reranker`, `guard`, and `qdrant`.
 
 ### 6.2 Cloudflare Tunnel
 
@@ -366,8 +461,11 @@ Multimodal-Economic-RAG-Assistant/
 | LLM service unreachable / timeout | Return HTTP 503 |
 | LLM returns empty/malformed output | Return apology, log error |
 | Guard output unparseable | Treat as unsafe, fail closed |
+| Qdrant returns 0 results | Return "no relevant context found" message without calling LLM |
 
 The apology message (`APOLOGY_MESSAGE`) is used for guardrail failures only. HTTP 503s are distinct so WebUI shows a "service unavailable" message. All timeouts configured via env vars.
+
+**Concurrency:** Model services handle requests sequentially (single-worker uvicorn). Concurrent orchestrator requests are handled via async I/O; GPU service calls queue naturally. For Phase 1 demo traffic levels, this is acceptable. If load increases, add gunicorn workers or model replicas.
 
 ## 8. Extensibility
 
