@@ -1,0 +1,67 @@
+---
+title: Guard Service — Input/Output Moderation State Machine
+---
+stateDiagram-v2
+    [*] --> ReceiveRequest: POST /classify
+
+    ReceiveRequest: Receive Classification Request
+    note right of ReceiveRequest
+        Fields
+        - text content to check
+        - role input or output
+        - prompt (only for output role)
+    end note
+
+    state role_check <<choice>>
+    ReceiveRequest --> role_check
+
+    role_check --> FormatInput: role is input
+    role_check --> FormatOutput: role is output
+
+    FormatInput: Format Input Moderation
+    note right of FormatInput
+        messages = user message only
+        Apply chat template
+    end note
+
+    FormatOutput: Format Output Moderation
+    note right of FormatOutput
+        messages = user prompt + assistant text
+        Apply chat template
+    end note
+
+    FormatInput --> Generate
+    FormatOutput --> Generate
+
+    Generate: Generate with Qwen3Guard-Gen-0.6B
+    note right of Generate
+        max_new_tokens 128
+        Parse output for safety label
+    end note
+
+    Generate --> ParseOutput
+
+    ParseOutput: Parse Safety Label
+
+    state parse_result <<choice>>
+    ParseOutput --> parse_result
+
+    parse_result --> Safe: label is Safe
+    parse_result --> Unsafe: label is Unsafe
+    parse_result --> Unsafe: label is Controversial
+    parse_result --> Unsafe: Unparseable (fail closed)
+
+    Safe: Return SAFE
+    note right of Safe
+        Response label safe
+    end note
+
+    Unsafe: Return UNSAFE
+    note right of Unsafe
+        Any non-Safe result treated as unsafe
+        Controversial maps to unsafe
+        Parse failure maps to unsafe (fail closed)
+    end note
+
+    Safe --> [*]
+    Unsafe --> [*]

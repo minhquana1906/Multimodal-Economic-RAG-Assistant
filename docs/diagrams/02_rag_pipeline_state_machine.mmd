@@ -1,0 +1,163 @@
+---
+title: "RAG Pipeline — State Machine"
+---
+stateDiagram-v2
+    [*] --> ExtractQuery: Receive OpenAI-format messages
+
+    ExtractQuery: Extract Last User Message
+    note right of ExtractQuery
+        Only the last "user" message is used.
+        Previous turns discarded (stateless Phase 1).
+    end note
+
+    ExtractQuery --> InputGuard: user_query extracted
+
+    InputGuard: Input Guard Check
+    note right of InputGuard
+        POST /classify
+        role: "input"
+        timeout: GUARD_TIMEOUT_S (10s)
+    end note
+
+    InputGuard --> ReturnApology: UNSAFE
+    InputGuard --> GuardUnreachable: Service Error
+    InputGuard --> EmbedQuery: SAFE
+
+    GuardUnreachable: Guard Unreachable
+    note right of GuardUnreachable
+        Fail closed — treat as unsafe
+    end note
+    GuardUnreachable --> ReturnApology
+
+    EmbedQuery: Embed Query (Dense Vector)
+    note right of EmbedQuery
+        Qwen3-Embedding-0.6B
+        prompt_name="query"
+        1024 dimensions
+    end note
+
+    EmbedQuery --> HybridRetrieve
+
+    HybridRetrieve: Hybrid Retrieval from Qdrant
+    note right of HybridRetrieve
+        Dense: top-40 prefetch
+        Sparse (BM25): top-40 prefetch
+        RRF fusion (k=60) → top-20
+    end note
+
+    HybridRetrieve --> Rerank: top-20 candidates
+
+    Rerank: Rerank Candidates
+    note right of Rerank
+        Qwen3-Reranker-0.6B
+        yes/no logit scoring
+        Select top RERANK_TOP_N (5)
+    end note
+
+    Rerank --> EvalFallback: reranked chunks + scores
+
+    EvalFallback: Evaluate Web Fallback Trigger
+
+    state eval_check <<choice>>
+    EvalFallback --> eval_check
+
+    eval_check --> WebFallback: chunk_count < 3\nOR top_score < 0.5
+    eval_check --> CheckEmpty: Both conditions pass
+
+    WebFallback: Tavily Web Search
+    note right of WebFallback
+        TavilyClient.search()
+        max_results: TAVILY_MAX_RESULTS (5)
+        Merge: Qdrant chunks first, then web results
+        Tag web results: source_type="web"
+    end note
+
+    WebFallback --> CheckEmpty: merged context
+    WebFallback --> CheckEmpty: Tavily error → use existing chunks
+
+    CheckEmpty: Check Combined Context
+
+    state empty_check <<choice>>
+    CheckEmpty --> empty_check
+
+    empty_check --> ReturnNoContext: context is empty
+    empty_check --> BuildPrompt: context has chunks
+
+    ReturnNoContext: Return "No Context" Message
+    note right of ReturnNoContext
+        "Xin lỗi, tôi không thể tìm thấy
+        thông tin liên quan."
+        Skip LLM call entirely.
+    end note
+    ReturnNoContext --> [*]
+
+    BuildPrompt: Build RAG Prompt
+    note right of BuildPrompt
+        System: Vietnamese economics expert prompt
+        User: Context chunks [1]..[N] + user query
+        Chunks ordered by reranker score (highest first)
+    end note
+
+    BuildPrompt --> GenerateAnswer
+
+    GenerateAnswer: LLM Generation
+    note right of GenerateAnswer
+        Qwen3.5-4B via vLLM
+        enable_thinking: False
+        timeout: LLM_TIMEOUT_S (60s)
+    end note
+
+    GenerateAnswer --> OutputGuard: draft answer
+
+    OutputGuard: Output Guard Check
+    note right of OutputGuard
+        POST /classify
+        role: "output"
+        prompt: original user query
+    end note
+
+    OutputGuard --> AppendCitations: SAFE
+    OutputGuard --> RetryGeneration: UNSAFE (1st time)
+
+    RetryGeneration: Retry with Safety Feedback
+    note right of RetryGeneration
+        Append safety feedback to prompt:
+        "Câu trả lời trước đó bị đánh giá
+        là không an toàn..."
+        Generate new answer via LLM
+    end note
+
+    RetryGeneration --> OutputGuard2: retried answer
+
+    OutputGuard2: Re-check Output Guard
+
+    OutputGuard2 --> AppendCitations: SAFE
+    OutputGuard2 --> ReturnApology: STILL UNSAFE
+
+    AppendCitations: Append Citation Block
+    note right of AppendCitations
+        ---
+        Nguồn tham khảo:
+        [1] title — source, date — url
+        [2] ...
+    end note
+
+    AppendCitations --> SimulateStream
+
+    SimulateStream: Simulate SSE Streaming
+    note right of SimulateStream
+        Split on whitespace
+        Yield each word as SSE chunk
+        ~15ms inter-chunk delay
+        Citations as final chunk
+    end note
+
+    SimulateStream --> [*]
+
+    ReturnApology: Return Apology Message
+    note right of ReturnApology
+        APOLOGY_MESSAGE env var
+        "Xin loi, toi khong the tra loi
+        cau hoi nay."
+    end note
+    ReturnApology --> [*]

@@ -1,52 +1,82 @@
 sequenceDiagram
     participant U as User
     participant UI as Open WebUI
-    participant API as FastAPI
+    participant API as FastAPI Orchestrator
     participant G as Qwen3Guard
-    participant ASR as Qwen3-ASR
-    participant VLM as Qwen3-VL
-    participant RET as Retriever/Qdrant
+    participant EMB as Embedding Service
+    participant Q as Qdrant
     participant R as Reranker
-    participant LLM as Qwen3.5-4B
+    participant T as Tavily Web Search
+    participant LLM as Qwen3.5-4B (Remote)
 
-    U->>UI: Send text/audio/image
-    UI->>API: Request
+    Note over U,LLM: Phase 1 — Text-Only RAG Pipeline
 
-    alt Audio
-        API->>ASR: Transcribe audio
-        ASR-->>API: Transcript
-    end
+    U->>UI: Send text query
+    UI->>API: POST /v1/chat/completions<br/>(OpenAI-compatible, stream: true)
 
-    alt Image/Chart
-        API->>VLM: Analyze image/chart
-        VLM-->>API: Structured text summary
-    end
+    Note over API: Extract last user message<br/>(stateless — discard history)
 
-    API->>G: Check input safety
+    %% Input Guard
+    API->>G: POST /classify (role: "input")
     G-->>API: safe / unsafe
 
     alt Input unsafe
-        API-->>UI: Default apology
+        API-->>UI: Apology (APOLOGY_MESSAGE)
+        UI-->>U: "Xin loi, toi khong the tra loi..."
     else Input safe
-        API->>RET: Hybrid retrieve
-        RET-->>API: Top-k chunks
-        API->>R: Rerank
-        R-->>API: Ranked context
-        API->>LLM: Generate answer
-        LLM-->>API: Draft answer
-        API->>G: Check output safety
-        G-->>API: safe / unsafe
+        %% Embedding
+        API->>EMB: POST /embed (is_query: true)
+        EMB-->>API: 1024-dim dense vector
 
-        alt Output unsafe
-            API->>LLM: Retry with safety feedback
-            LLM-->>API: New answer
-            API->>G: Re-check output
-            G-->>API: safe / unsafe
+        %% Hybrid Retrieval
+        Note over API: Vietnamese tokenize query<br/>(underthesea) → BM25 sparse vector
+        API->>Q: Hybrid query<br/>dense top-40 + sparse top-40<br/>RRF fusion (k=60) → top-20
+        Q-->>API: Top-20 candidate chunks
+
+        %% Reranking
+        API->>R: POST /rerank (query + 20 passages)
+        R-->>API: Scores (yes/no logit) → top-5
+
+        %% Web Fallback Evaluation
+        Note over API: Evaluate fallback triggers:<br/>chunk_count < 3 OR top_score < 0.5?
+
+        opt Fallback triggered
+            API->>T: TavilyClient.search(query, max_results=5)
+            T-->>API: Web results (tagged source_type: "web")
+            Note over API: Merge: Qdrant chunks first,<br/>then Tavily results
         end
 
-        alt Final safe
-            API-->>UI: Answer + citations
-        else Final unsafe
-            API-->>UI: Default apology
+        alt Combined context empty
+            API-->>UI: "Không tìm thấy thông tin liên quan"
+            UI-->>U: No context message (skip LLM)
+        else Context available
+            %% LLM Generation
+            Note over API: Build prompt:<br/>System: Vietnamese economics expert<br/>User: [1]..[N] context + query
+            API->>LLM: POST /v1/chat/completions<br/>(enable_thinking: false)
+            LLM-->>API: Draft answer
+
+            %% Output Guard
+            API->>G: POST /classify (role: "output", prompt: query)
+            G-->>API: safe / unsafe
+
+            alt Output unsafe (attempt 1)
+                Note over API: Append safety feedback:<br/>"Câu trả lời trước đó bị đánh giá<br/>là không an toàn..."
+                API->>LLM: Retry with safety feedback
+                LLM-->>API: New answer
+                API->>G: Re-check output
+                G-->>API: safe / unsafe
+
+                alt Still unsafe (attempt 2)
+                    API-->>UI: Apology (APOLOGY_MESSAGE)
+                    UI-->>U: Default apology
+                end
+            end
+
+            Note over API: Append citation block:<br/>Nguồn tham khảo: [1] title — source — url
+
+            Note over API: Simulate SSE streaming:<br/>split on whitespace, ~15ms delay<br/>citations as final chunk
+
+            API-->>UI: SSE stream (word-by-word)
+            UI-->>U: Answer + citations
         end
     end

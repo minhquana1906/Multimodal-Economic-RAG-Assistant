@@ -1,0 +1,69 @@
+---
+title: "Hybrid Retrieval & Reranking Pipeline"
+---
+flowchart LR
+    QUERY["User Query"]
+
+    subgraph DensePath["Dense Path"]
+        VN_TOK_D["Vietnamese Tokenization<br/>(handled by model)"]
+        DENSE_ENC["Qwen3-Embedding-0.6B<br/>prompt_name='query'<br/>→ 1024-dim vector"]
+        DENSE_PREFETCH["Qdrant Dense Prefetch<br/>top-40"]
+    end
+
+    subgraph SparsePath["Sparse Path"]
+        VN_TOK_S["Vietnamese Tokenization<br/>underthesea.word_tokenize()"]
+        SPARSE_ENC["fastembed<br/>Qdrant/bm25 model<br/>→ sparse vector"]
+        SPARSE_PREFETCH["Qdrant Sparse Prefetch<br/>top-40"]
+    end
+
+    QUERY --> VN_TOK_D --> DENSE_ENC --> DENSE_PREFETCH
+    QUERY --> VN_TOK_S --> SPARSE_ENC --> SPARSE_PREFETCH
+
+    subgraph Fusion["Qdrant Server-Side Fusion"]
+        RRF["Reciprocal Rank Fusion<br/>k = 60<br/>score = Σ 1/(k + rank_i)"]
+        TOP20["Select Top-20<br/>Candidates"]
+    end
+
+    DENSE_PREFETCH --> RRF
+    SPARSE_PREFETCH --> RRF
+    RRF --> TOP20
+
+    subgraph Reranking["Reranker Service :8002"]
+        FORMAT["Format Pairs<br/>PREFIX + Instruct + Query + Document + SUFFIX<br/>(chat template with think suppression)"]
+        LOGITS["Qwen3-Reranker-0.6B<br/>Extract yes/no logits<br/>score = exp(yes) / (exp(yes) + exp(no))"]
+        SORT["Sort by Score<br/>Descending"]
+        TOPN["Select Top-N<br/>(RERANK_TOP_N = 5)"]
+    end
+
+    TOP20 --> FORMAT --> LOGITS --> SORT --> TOPN
+
+    subgraph FallbackEval["Web Fallback Evaluation"]
+        CHECK_COUNT{"chunk_count < 3?<br/>(FALLBACK_MIN_CHUNKS)"}
+        CHECK_SCORE{"top_score < 0.5?<br/>(FALLBACK_SCORE_THRESHOLD)"}
+        TAVILY["Tavily Web Search<br/>max_results = 5"]
+        MERGE["Merge Results<br/>Qdrant chunks first<br/>+ Tavily results (tagged web)"]
+        PASS_THROUGH["Use Qdrant<br/>Chunks Only"]
+    end
+
+    TOPN --> CHECK_COUNT
+    CHECK_COUNT -->|"Yes"| TAVILY
+    CHECK_COUNT -->|"No"| CHECK_SCORE
+    CHECK_SCORE -->|"Yes"| TAVILY
+    CHECK_SCORE -->|"No"| PASS_THROUGH
+    TAVILY --> MERGE
+
+    MERGE --> CONTEXT["Final Context<br/>for LLM Prompt"]
+    PASS_THROUGH --> CONTEXT
+
+    %% Styling
+    classDef dense fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
+    classDef sparse fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    classDef fusion fill:#ede9fe,stroke:#8b5cf6,stroke-width:2px
+    classDef rerank fill:#fce7f3,stroke:#ec4899,stroke-width:2px
+    classDef fallback fill:#d1fae5,stroke:#10b981,stroke-width:2px
+
+    class VN_TOK_D,DENSE_ENC,DENSE_PREFETCH dense
+    class VN_TOK_S,SPARSE_ENC,SPARSE_PREFETCH sparse
+    class RRF,TOP20 fusion
+    class FORMAT,LOGITS,SORT,TOPN rerank
+    class CHECK_COUNT,CHECK_SCORE,TAVILY,MERGE,PASS_THROUGH fallback

@@ -13,7 +13,7 @@ A multimodal RAG system for Vietnamese economic and financial news, using the Hu
 ### 2.1 High-Level Flow
 
 ```
-User → Open WebUI → FastAPI Orchestrator → [Guard → Retriever → Reranker → LLM → Guard] → Answer + Citations
+User → Open WebUI → FastAPI Orchestrator → [Guard → Retriever → Reranker → (Web Fallback?) → LLM → Guard] → Answer + Citations
 ```
 
 ### 2.2 Service Topology (Phase 1)
@@ -28,6 +28,7 @@ User → Open WebUI → FastAPI Orchestrator → [Guard → Retriever → Rerank
 | Guard | `guard` | Yes (local) | 8003 | transformers |
 | LLM | N/A (remote) | Yes (remote) | 8004 | vLLM |
 | Cloudflare Tunnel | `tunnel` | No | — | cloudflared |
+| Tavily Web Search | N/A (external API) | No | — | tavily-python |
 
 Phase 2 adds: `asr` (port 8005, local GPU, `qwen-asr`).
 Phase 3 adds: `vlm` (port 8006, remote GPU, `transformers`).
@@ -173,35 +174,61 @@ orchestrator/
 1. Extract the last user message from the OpenAI-format messages array
 2. Guard check (input) → if unsafe: return apology immediately
 3. Embed query → hybrid retrieve from Qdrant (top-20) → rerank (top-5)
-4. If retrieval returns 0 results → return "Xin loi, toi khong tim thay thong tin lien quan trong co so du lieu." without calling LLM
-5. Build prompt from template (see §4.2.1)
-6. Generate answer via LLM (full response, not streaming)
-7. Guard check (output):
+4. Evaluate reranked results (see §4.2.1 — Web Search Fallback):
+   → if chunk count < FALLBACK_MIN_CHUNKS OR top reranker score < FALLBACK_SCORE_THRESHOLD:
+       call Tavily API → merge web results with any existing Qdrant chunks
+5. If combined context is empty → return "Xin lỗi, tôi không thể tìm thấy thông tin liên quan." without calling LLM
+6. Build prompt from template (see §4.2.2)
+7. Generate answer via LLM (full response, not streaming)
+8. Guard check (output):
    → safe: proceed
-   → unsafe: retry once with safety feedback (see §4.2.2) appended to prompt
+   → unsafe: retry once with safety feedback (see §4.2.3) appended to prompt
    → still unsafe: return apology
-8. Simulate streaming: split final answer on whitespace, yield each word as an SSE data chunk with ~15ms inter-chunk delay. Citations are appended as a single final chunk.
+9. Simulate streaming: split final answer on whitespace, yield each word as an SSE data chunk with ~15ms inter-chunk delay. Citations are appended as a single final chunk.
 ```
 
-#### 4.2.1 LLM System Prompt and RAG Prompt Template
+#### 4.2.1 Web Search Fallback
+
+**Trigger conditions (either is sufficient):**
+
+| Condition | Config var | Default |
+|-----------|-----------|---------|
+| Reranked chunk count < threshold | `FALLBACK_MIN_CHUNKS` | `3` |
+| Top reranker score < threshold | `FALLBACK_SCORE_THRESHOLD` | `0.5` |
+
+**Evaluation:** After reranking, check two conditions:
+1. Count how many chunks were returned by the reranker (up to `RERANK_TOP_N`). If this count is less than `FALLBACK_MIN_CHUNKS`, trigger fallback.
+2. Check the highest reranker score among returned chunks. If it is below `FALLBACK_SCORE_THRESHOLD`, trigger fallback.
+
+**Fallback behavior:**
+- Call `TavilyClient.search(query=user_query, max_results=TAVILY_MAX_RESULTS)` via `tavily-python` library
+- `TAVILY_MAX_RESULTS` defaults to `5`
+- Merge results: Qdrant chunks listed first, Tavily results appended after
+- Tavily results are tagged `source_type: "web"` internally so the prompt builder and citation block can distinguish them
+
+**Graceful degradation:** If Tavily is unavailable or returns an error, log a warning and proceed with whatever Qdrant chunks exist — do not abort the request.
+
+**Integration:** Tavily calls are made directly inside `pipeline/rag.py` using the `tavily-python` SDK. No new service container is needed — `TAVILY_API_KEY` is injected via env var into the orchestrator container.
+
+#### 4.2.2 LLM System Prompt and RAG Prompt Template
 
 **System prompt:**
 
 ```
-Ban la tro ly chuyen gia ve kinh te va tai chinh Viet Nam. Nhiem vu cua ban la tra loi cau hoi cua nguoi dung dua tren cac bai bao duoc cung cap ben duoi.
+Bạn là trợ lý chuyên gia về kinh tế và tài chính Việt Nam. Nhiệm vụ của bạn là trả lời câu hỏi của người dùng dựa trên các bài báo được cung cấp bên dưới.
 
-Quy tac:
-- Chi tra loi bang tieng Viet.
-- Chi su dung thong tin tu cac bai bao duoc cung cap. Khong su dung kien thuc ben ngoai.
-- Neu cac bai bao khong chua du thong tin de tra loi, hay noi ro rang ban khong tim thay thong tin lien quan.
-- Trich dan nguon bang so thu tu [1], [2], ... tuong ung voi cac bai bao ben duoi.
-- Tra loi ngan gon, chinh xac, di thang vao van de.
+Quy tắc:
+- Chỉ trả lời bằng tiếng Việt.
+- Chỉ sử dụng thông tin từ các bài báo được cung cấp. Không sử dụng kiến thức bên ngoài.
+- Nếu các bài báo không chứa đủ thông tin để trả lời, hãy nói rõ rằng bạn không tìm thấy thông tin liên quan.
+- Trích dẫn nguồn bằng số thứ tự [1], [2], ... tương ứng với các bài báo bên dưới.
+- Trả lời ngắn gọn, chính xác, đi thẳng vào vấn đề.
 ```
 
 **User prompt template:**
 
 ```
-Ngu canh tu co so du lieu:
+Ngữ cảnh từ cơ sở dữ liệu:
 
 [1] {title_1} — {source_1}, {published_date_1}
 {chunk_text_1}
@@ -212,7 +239,7 @@ Ngu canh tu co so du lieu:
 ...
 
 ---
-Cau hoi: {user_query}
+Câu hỏi: {user_query}
 ```
 
 Chunks are ordered by reranker score (highest first). Each chunk includes title, source, date, and the chunk text.
@@ -221,7 +248,7 @@ Chunks are ordered by reranker score (highest first). Each chunk includes title,
 
 ```
 ---
-Nguon tham khao:
+Nguồn tham khảo:
 [1] {title_1} — {source_1}, {published_date_1} — {url_1}
 [2] {title_2} — {source_2}, {published_date_2} — {url_2}
 ```
@@ -231,7 +258,7 @@ Nguon tham khao:
 When the output guard flags a generated answer as unsafe, the orchestrator appends this feedback to the prompt and retries generation once:
 
 ```
-Phan hoi truoc do bi danh gia la khong an toan. Vui long tra loi lai mot cach trung lap, chi dua tren thong tin trong ngu canh duoc cung cap. Khong dua ra y kien ca nhan hay noi dung gay tranh cai.
+Phản hồi từ hệ thống kiểm duyệt: Câu trả lời trước đó bị đánh giá là không an toàn. Vui lòng trả lời lại một cách trung lập, chỉ dựa trên thông tin trong ngữ cảnh được cung cấp. Không đưa ra ý kiến cá nhân hay nội dung gây tranh cãi. 
 ```
 
 ### 4.3 Open WebUI Integration
