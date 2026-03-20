@@ -6,12 +6,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf python3.12 /usr/bin/python3 \
     && ln -sf python3 /usr/bin/python \
-    && ln -sf pip3 /usr/bin/pip
+    && python3.12 -m ensurepip --upgrade \
+    && python3.12 -m pip install --upgrade pip
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir torch==2.3.1+cu121 \
+    --index-url https://download.pytorch.org/whl/cu121 \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
