@@ -1,12 +1,25 @@
 import sys
 from pathlib import Path
 
-# Insert services/embedding at the FRONT of sys.path so that
-# `import app` finds services/embedding/app.py before any other module.
-_embedding_path = str(Path(__file__).parents[2] / "services" / "embedding")
-if _embedding_path not in sys.path:
-    sys.path.insert(0, _embedding_path)
+# Register both service paths so `import app` can find the right module
+# when tests are run with PYTHONPATH=services/<name>.
+#
+# We use sys.path.append (NOT insert) so that an explicit PYTHONPATH set at
+# invocation time always takes precedence over these fallback entries:
+#
+#   PYTHONPATH=services/reranker .venv/bin/python -m pytest ...
+#   PYTHONPATH=services/embedding .venv/bin/python -m pytest ...
+#
+# Python prepends PYTHONPATH entries to sys.path before pytest starts, so
+# appending here means the caller-supplied path wins.
+
+_root = Path(__file__).parents[2]
+
+for _service in ("embedding", "reranker"):
+    _svc_path = str(_root / "services" / _service)
+    if _svc_path not in sys.path:
+        sys.path.append(_svc_path)
 
 # Evict any already-cached app module so the next import picks
-# up the correct one from services/embedding/.
+# up the correct one from whichever service path is first on sys.path.
 sys.modules.pop("app", None)

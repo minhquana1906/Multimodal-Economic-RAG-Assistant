@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir torch==2.3.1+cu121 \
     --index-url https://download.pytorch.org/whl/cu121 \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY app.py .
 
 EXPOSE 8002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8002"]
