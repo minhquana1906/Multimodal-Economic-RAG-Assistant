@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +10,7 @@ from orchestrator.models.schemas import (
     ChatResponse,
     ChatChoice,
     ChatDelta,
+    ChatStreamChunk,
 )
 from orchestrator.pipeline.rag import RAGState
 
@@ -60,26 +60,56 @@ def create_chat_router(rag_graph) -> APIRouter:
         # SSE streaming: answer word-by-word, then citations block, then [DONE]
         async def generate():
             words = answer.split()
-            for i, word in enumerate(words):
-                chunk = ChatChoice(
-                    delta=ChatDelta(content=word + (" " if i < len(words) - 1 else "")),
-                    finish_reason=None,
+            # First chunk: include role
+            if words:
+                first_chunk = ChatStreamChunk(
+                    model=request.model,
+                    choices=[ChatChoice(delta=ChatDelta(role="assistant", content=words[0] + (" " if len(words) > 1 else "")), finish_reason=None)],
                 )
-                yield f"data: {json.dumps(chunk.model_dump())}\n\n"
+                yield f"data: {first_chunk.model_dump_json(exclude_none=True)}\n\n"
+
+                # Subsequent word chunks: no role
+                for i, word in enumerate(words[1:], start=1):
+                    is_last = (i == len(words) - 1) and not citations
+                    chunk = ChatStreamChunk(
+                        model=request.model,
+                        choices=[ChatChoice(
+                            delta=ChatDelta(content=word + (" " if i < len(words) - 1 else "")),
+                            finish_reason="stop" if is_last else None,
+                        )],
+                    )
+                    yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+            else:
+                # Empty answer — emit a stop chunk immediately
+                stop_chunk = ChatStreamChunk(
+                    model=request.model,
+                    choices=[ChatChoice(delta=ChatDelta(), finish_reason="stop")],
+                )
+                yield f"data: {stop_chunk.model_dump_json(exclude_none=True)}\n\n"
 
             if citations:
                 citations_text = "\n".join(
                     f"- {c.get('title', '')} ({c.get('source', '')})"
                     for c in citations
                 )
-                cite_chunk = ChatChoice(
-                    delta=ChatDelta(content=f"\n\n**Nguồn:**\n{citations_text}"),
-                    finish_reason="stop",
+                cite_chunk = ChatStreamChunk(
+                    model=request.model,
+                    choices=[ChatChoice(
+                        delta=ChatDelta(content=f"\n\n**Nguồn:**\n{citations_text}"),
+                        finish_reason="stop",
+                    )],
                 )
-                yield f"data: {json.dumps(cite_chunk.model_dump())}\n\n"
+                yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
 
             yield "data: [DONE]\n\n"
 
-        return StreamingResponse(generate(), media_type="text/event-stream")
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return router

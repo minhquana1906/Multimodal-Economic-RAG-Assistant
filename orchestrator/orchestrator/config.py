@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "multimodal-rag"
 
+    # Web search
+    tavily_api_key: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
