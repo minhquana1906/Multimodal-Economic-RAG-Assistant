@@ -85,3 +85,20 @@ async def test_rerank_empty_passages(client, mock_reranker):
         "passages": [],
     })
     assert response.status_code == 422
+
+
+def test_format_pair_contains_prefix_and_suffix():
+    from app import format_pair, PREFIX, SUFFIX, INSTRUCTION
+    result = format_pair("test query", "test document")
+    assert result.startswith(PREFIX)
+    assert result.endswith(SUFFIX)
+    assert "<Instruct>:" in result
+    assert "<Query>: test query" in result
+    assert "<Document>: test document" in result
+    assert INSTRUCTION in result
+
+
+def test_format_pair_contains_thinking_suppression():
+    from app import format_pair
+    result = format_pair("q", "d")
+    assert "<think>\n\n</think>\n\n" in result

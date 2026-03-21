@@ -115,3 +115,28 @@ async def test_classify_controversial_is_unsafe(client, mock_guard):
     })
     assert response.status_code == 200
     assert response.json()["label"] == "unsafe"
+
+
+def test_parse_safety_label_safe():
+    from app import parse_safety_label
+    assert parse_safety_label("Safety: Safe\nExplanation") == "safe"
+
+
+def test_parse_safety_label_unsafe():
+    from app import parse_safety_label
+    assert parse_safety_label("Safety: Unsafe\nCategory: Violence") == "unsafe"
+
+
+def test_parse_safety_label_controversial():
+    from app import parse_safety_label
+    assert parse_safety_label("Safety: Controversial") == "unsafe"
+
+
+def test_parse_safety_label_unparseable():
+    from app import parse_safety_label
+    assert parse_safety_label("garbage output") == "unsafe"
+
+
+def test_parse_safety_label_case_insensitive():
+    from app import parse_safety_label
+    assert parse_safety_label("safety: safe") == "safe"
