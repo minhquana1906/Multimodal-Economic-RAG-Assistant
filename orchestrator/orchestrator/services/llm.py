@@ -4,9 +4,10 @@ from langsmith import traceable
 
 logger = logging.getLogger(__name__)
 
+
 class LLMClient:
     def __init__(self, base_url: str, api_key: str = "fake", timeout: float = 60.0):
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
         self.timeout = timeout
 
     @traceable(name="Generate Answer", run_type="llm")
