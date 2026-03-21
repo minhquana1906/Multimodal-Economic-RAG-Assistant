@@ -67,12 +67,13 @@ def _initial_state(query="GDP Việt Nam?"):
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_happy_path():
-    """Happy path: input safe → embed → retrieve → rerank → generate → output safe → citations."""
+    """Full happy path: all services succeed, answer + citations returned."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{"id": "1", "text": "GDP text", "source": "src.com", "title": "GDP", "score": 0.9}]
     reranked = [{"index": 0, "score": 0.9}]
 
+    # Use fallback_min_chunks=1 so the single reranked doc doesn't trigger web fallback
     services = _make_services(
         input_safe=True,
         retrieved_docs=retrieved,
@@ -80,8 +81,8 @@ async def test_rag_pipeline_happy_path():
         answer="GDP tăng 7%",
         output_safe=True,
     )
-    config = _make_config()
-    graph = await build_rag_graph(services, config)
+    config = _make_config(fallback_min_chunks=1)
+    graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
@@ -91,6 +92,7 @@ async def test_rag_pipeline_happy_path():
     assert len(result["citations"]) == 1
     assert result["citations"][0]["title"] == "GDP"
     services.llm.generate.assert_called_once()
+    services.web_search.search.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -100,19 +102,19 @@ async def test_rag_pipeline_unsafe_input():
 
     services = _make_services(input_safe=False)
     config = _make_config()
-    graph = await build_rag_graph(services, config)
+    graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
     assert result["input_safe"] is False
-    assert result["answer"] == ""          # LLM never called
+    assert result["answer"] == ""
     services.llm.generate.assert_not_called()
     services.embedder.embed_query.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_no_context():
-    """No context found: final_context empty → no_context_message returned."""
+    """No context: empty retrieval + no web results → no_context_message, LLM not called."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     services = _make_services(
@@ -121,40 +123,81 @@ async def test_rag_pipeline_no_context():
         reranked=[],
         web_results=[],
     )
-    config = _make_config()
-    graph = await build_rag_graph(services, config)
+    # fallback_min_chunks=0 ensures web fallback doesn't run (no retrieval = already tested separately)
+    config = _make_config(fallback_min_chunks=0)
+    graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
-    # generate_node returns no_context_message when final_context is empty
     assert result["answer"] == config.no_context_message
-    # LLM generate should not be called (no_context_message is set directly)
     services.llm.generate.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_web_fallback_triggered():
-    """Web fallback: reranked_docs < fallback_min_chunks → web search called."""
+    """Web fallback: 1 reranked doc < fallback_min_chunks=3 → web search called."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{"id": "1", "text": "t", "source": "s", "title": "T", "score": 0.9}]
-    reranked = [{"index": 0, "score": 0.9}]   # only 1, threshold is 3
+    reranked = [{"index": 0, "score": 0.9}]
     web = [{"text": "web content", "source": "web.com", "title": "Web"}]
 
     services = _make_services(
         input_safe=True,
         retrieved_docs=retrieved,
-        reranked=reranked,       # 1 < fallback_min_chunks=3 → triggers fallback
+        reranked=reranked,
         web_results=web,
         answer="Answer with web",
         output_safe=True,
     )
     config = _make_config(fallback_min_chunks=3)
-    graph = await build_rag_graph(services, config)
+    graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
     services.web_search.search.assert_called_once()
-    # final_context should include both reranked + web results
     assert any(c["source"] == "web.com" for c in result["final_context"])
     assert result["answer"] == "Answer with web"
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_embed_failure():
+    """Embed failure: error set → retrieve and web search never called."""
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    services = _make_services(input_safe=True, embed_raises=True)
+    config = _make_config()
+    graph = build_rag_graph(services, config)
+
+    result = await graph.ainvoke(_initial_state())
+
+    assert result["error"] is not None
+    assert result["answer"] == ""
+    services.retriever.hybrid_search.assert_not_called()
+    services.web_search.search.assert_not_called()
+    services.llm.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_unsafe_output():
+    """Unsafe output: guard rejects answer → guard_error_message, no citations."""
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [{"id": "1", "text": "t", "source": "s", "title": "T", "score": 0.9}]
+    reranked = [{"index": 0, "score": 0.9}]
+
+    services = _make_services(
+        input_safe=True,
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        answer="Unsafe generated text",
+        output_safe=False,
+    )
+    config = _make_config(fallback_min_chunks=1)
+    graph = build_rag_graph(services, config)
+
+    result = await graph.ainvoke(_initial_state())
+
+    assert result["output_safe"] is False
+    assert result["answer"] == config.guard_error_message
+    assert result["citations"] == []  # citations not built when output blocked
