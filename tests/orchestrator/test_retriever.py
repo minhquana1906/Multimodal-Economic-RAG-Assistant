@@ -46,3 +46,28 @@ async def test_retriever_hybrid_passes_sparse_vector():
     assert len(result) == 1
     assert result[0]["id"] == "abc123"
     assert result[0]["score"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_retriever_dense_only_uses_named_vector():
+    """Dense-only path (sparse_vector=None) uses DENSE_VECTOR_NAME."""
+    from orchestrator.services.retriever import RetrieverClient, DENSE_VECTOR_NAME
+
+    retriever = RetrieverClient("http://qdrant:6333", "test_collection")
+
+    mock_point = MagicMock()
+    mock_point.id = "xyz"
+    mock_point.score = 0.8
+    mock_point.payload = {"text": "content", "source": "src", "title": "ttl"}
+
+    mock_result = MagicMock()
+    mock_result.points = [mock_point]
+
+    with patch.object(retriever.client, "query_points", new_callable=AsyncMock, return_value=mock_result) as mock_qp:
+        result = await retriever.hybrid_search(dense_vector=[0.1] * 1024)
+
+    call_kwargs = mock_qp.call_args.kwargs
+    assert call_kwargs.get("using") == DENSE_VECTOR_NAME
+    assert "prefetch" not in call_kwargs   # not hybrid
+    assert len(result) == 1
+    assert result[0]["id"] == "xyz"

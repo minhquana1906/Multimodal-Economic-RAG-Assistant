@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     def __init__(self, base_url: str, api_key: str = "fake", timeout: float = 60.0):
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-        self.timeout = timeout
+        # timeout is wired into AsyncOpenAI; no need to store separately
 
     @traceable(name="Generate Answer", run_type="llm")
     async def generate(

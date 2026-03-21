@@ -5,8 +5,9 @@ from langsmith import traceable
 logger = logging.getLogger(__name__)
 
 class WebSearchClient:
-    def __init__(self, api_key: str = ""):
+    def __init__(self, api_key: str = "", timeout: float = 10.0):
         self.api_key = api_key
+        self.timeout = timeout
 
     @traceable(name="Web Search Fallback", run_type="retriever")
     async def search(self, query: str, max_results: int = 5) -> list[dict]:
@@ -19,7 +20,7 @@ class WebSearchClient:
                 response = await client.post(
                     "https://api.tavily.com/search",
                     json={"api_key": self.api_key, "query": query, "max_results": max_results},
-                    timeout=10.0,
+                    timeout=self.timeout,
                 )
                 response.raise_for_status()
                 results = response.json().get("results", [])
