@@ -80,3 +80,10 @@ async def test_chat_endpoint_streaming():
     for chunk in data_chunks:
         parsed = json.loads(chunk)
         assert "delta" in parsed
+
+    # Verify the content comes from *this* test's mock (not a stale mock from another test)
+    all_content = "".join(
+        json.loads(c).get("delta", {}).get("content", "")
+        for c in data_chunks
+    )
+    assert "GDP" in all_content

@@ -16,8 +16,6 @@ from orchestrator.pipeline.rag import RAGState
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
-
 
 def _build_initial_state(query: str) -> RAGState:
     return {
@@ -36,7 +34,8 @@ def _build_initial_state(query: str) -> RAGState:
 
 
 def create_chat_router(rag_graph) -> APIRouter:
-    """Return an APIRouter with /v1/chat/completions bound to the given RAG graph."""
+    """Return a fresh APIRouter with /v1/chat/completions bound to the given RAG graph."""
+    router = APIRouter()   # ← fresh per call, not a module-level singleton
 
     @router.post("/v1/chat/completions")
     async def chat_completions(request: ChatRequest):
