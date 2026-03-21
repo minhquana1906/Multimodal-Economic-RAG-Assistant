@@ -15,7 +15,7 @@ from pathlib import Path
 
 _root = Path(__file__).parents[2]
 
-for _service in ("embedding", "reranker"):
+for _service in ("embedding", "reranker", "guard"):
     _svc_path = str(_root / "services" / _service)
     if _svc_path not in sys.path:
         sys.path.append(_svc_path)
