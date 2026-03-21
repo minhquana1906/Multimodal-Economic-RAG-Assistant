@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+import time
+import uuid
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class Message(BaseModel):
-    role: str
+    role: Literal["system", "user", "assistant"]
     content: str
 
 
 class ChatRequest(BaseModel):
     model: str
-    messages: list[Message]
-    temperature: float = 0.7
-    max_tokens: int | None = None
+    messages: list[Message] = Field(min_length=1)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, gt=0)
     stream: bool = False
 
 
@@ -28,6 +32,9 @@ class ChatChoice(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex[:8]}")
+    object: str = "chat.completion.chunk"
+    created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: list[ChatChoice]
 

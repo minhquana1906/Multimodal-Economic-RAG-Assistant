@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     guard_timeout: float = 10.0
     llm_timeout: float = 60.0
     embedding_timeout: float = 15.0
+    reranker_timeout: float = 15.0
 
     # Messages (Vietnamese)
     no_context_message: str = "Xin lỗi, tôi không tìm thấy thông tin liên quan."
@@ -33,7 +34,7 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "multimodal-rag"
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 @lru_cache()
