@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 
@@ -18,17 +20,34 @@ from orchestrator.services.web_search import WebSearchClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── App factory ──────────────────────────────────────────────────────────────
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
     setup_langsmith(settings)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logger.info("Initialising service clients and RAG graph…")
+        services = SimpleNamespace(
+            guard=GuardClient(settings.guard_url, settings.guard_timeout),
+            embedder=EmbedderClient(settings.embedding_url, settings.embedding_timeout),
+            retriever=RetrieverClient(settings.qdrant_url, settings.qdrant_collection),
+            reranker=RerankerClient(settings.reranker_url, settings.reranker_timeout),
+            llm=LLMClient(settings.llm_url, timeout=settings.llm_timeout),
+            web_search=WebSearchClient(api_key=settings.tavily_api_key or ""),
+        )
+        rag_graph = build_rag_graph(services, settings)
+        app.include_router(create_chat_router(rag_graph))
+        logger.info("RAG graph ready")
+        yield
+        # graceful shutdown placeholder
+
     app = FastAPI(
         title="Multimodal RAG Orchestrator",
         description="OpenAI-compatible RAG API for Vietnamese economic news",
         version="1.0.0",
+        lifespan=lifespan,
     )
 
     @app.get("/health")
@@ -38,24 +57,6 @@ def create_app() -> FastAPI:
     @app.get("/v1/models")
     async def models():
         return {"data": [{"id": "multimodal-rag", "object": "model"}]}
-
-    @app.on_event("startup")
-    async def startup() -> None:
-        logger.info("Initialising service clients and RAG graph…")
-
-        class Services:
-            guard = GuardClient(settings.guard_url, settings.guard_timeout)
-            embedder = EmbedderClient(settings.embedding_url, settings.embedding_timeout)
-            retriever = RetrieverClient(settings.qdrant_url, settings.qdrant_collection)
-            reranker = RerankerClient(settings.reranker_url, settings.reranker_timeout)
-            llm = LLMClient(settings.llm_url, timeout=settings.llm_timeout)
-            web_search = WebSearchClient(api_key=settings.langsmith_api_key or "")
-
-        rag_graph = build_rag_graph(Services(), settings)
-        chat_router = create_chat_router(rag_graph)
-        app.include_router(chat_router)
-
-        logger.info("RAG graph ready")
 
     return app
 

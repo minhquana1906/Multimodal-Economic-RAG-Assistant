@@ -58,5 +58,5 @@ def test_chat_response_has_openai_fields():
         choices=[ChatChoice(delta=ChatDelta(content="hello"))]
     )
     assert resp.id.startswith("chatcmpl-")
-    assert resp.object == "chat.completion.chunk"
+    assert resp.object == "chat.completion"
     assert resp.created > 0
