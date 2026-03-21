@@ -24,3 +24,7 @@ qdrant_storage/
 # Model cache
 models/
 .cache/
+
+.claude/
+CLAUDE.md
+.mcp.json
