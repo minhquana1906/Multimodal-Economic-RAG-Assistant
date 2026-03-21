@@ -1,8 +1,9 @@
 import sys
 from pathlib import Path
 
-# Register both service paths so `import app` can find the right module
-# when tests are run with PYTHONPATH=services/<name>.
+# Register both service paths so `import embedding_app` / `import reranker_app` /
+# `import guard_app` can find the right module when tests are run with
+# PYTHONPATH=services/<name>.
 #
 # We use sys.path.append (NOT insert) so that an explicit PYTHONPATH set at
 # invocation time always takes precedence over these fallback entries:
@@ -20,6 +21,7 @@ for _service in ("embedding", "reranker", "guard"):
     if _svc_path not in sys.path:
         sys.path.append(_svc_path)
 
-# Evict any already-cached app module so the next import picks
+# Evict any already-cached service modules so the next import picks
 # up the correct one from whichever service path is first on sys.path.
-sys.modules.pop("app", None)
+for _mod in ("embedding_app", "reranker_app", "guard_app"):
+    sys.modules.pop(_mod, None)

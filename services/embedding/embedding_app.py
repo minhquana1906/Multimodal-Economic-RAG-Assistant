@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import os
 from contextlib import asynccontextmanager
 
@@ -38,12 +39,15 @@ class EmbedResponse(BaseModel):
     embeddings: list[list[float]]
 
 
+def _encode(texts, is_query):
+    if is_query:
+        return model.encode(texts, prompt_name="query")
+    return model.encode(texts)
+
+
 @app.post("/embed", response_model=EmbedResponse)
 async def embed(request: EmbedRequest):
     if model is None:
         return JSONResponse({"detail": "Model is still loading"}, status_code=503)
-    if request.is_query:
-        vectors = model.encode(request.texts, prompt_name="query")
-    else:
-        vectors = model.encode(request.texts)
+    vectors = await asyncio.to_thread(_encode, request.texts, request.is_query)
     return EmbedResponse(embeddings=vectors.tolist())

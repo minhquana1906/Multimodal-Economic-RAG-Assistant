@@ -8,13 +8,13 @@ from httpx import AsyncClient, ASGITransport
 def mock_reranker():
     """Mock transformers model and tokenizer.
 
-    Patching at `app.*` works because the `client` fixture calls
-    `importlib.reload(app)` — this re-executes the module's top-level
+    Patching at `reranker_app.*` works because the `client` fixture calls
+    `importlib.reload(reranker_app)` — this re-executes the module's top-level
     imports, and the patches are already in place at that point, so the
     reloaded module picks up the mocks rather than the real classes.
     """
-    with patch("app.AutoModelForCausalLM") as mock_model_cls, \
-         patch("app.AutoTokenizer") as mock_tok_cls:
+    with patch("reranker_app.AutoModelForCausalLM") as mock_model_cls, \
+         patch("reranker_app.AutoTokenizer") as mock_tok_cls:
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         mock_tokenizer.convert_tokens_to_ids.side_effect = lambda t: {"yes": 9891, "no": 2822}[t]
@@ -26,14 +26,14 @@ def mock_reranker():
 @pytest.fixture
 async def client(mock_reranker):
     import importlib
-    import app
-    importlib.reload(app)
+    import reranker_app
+    importlib.reload(reranker_app)
     mock_model, mock_tokenizer = mock_reranker
-    app.model = mock_model
-    app.tokenizer = mock_tokenizer
-    app.token_true_id = 9891
-    app.token_false_id = 2822
-    transport = ASGITransport(app=app.app)
+    reranker_app.model = mock_model
+    reranker_app.tokenizer = mock_tokenizer
+    reranker_app.token_true_id = 9891
+    reranker_app.token_false_id = 2822
+    transport = ASGITransport(app=reranker_app.app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
@@ -45,8 +45,8 @@ async def test_health_returns_200(client):
 
 
 async def test_health_returns_503_when_loading(client):
-    import app
-    app.model = None
+    import reranker_app
+    reranker_app.model = None
     response = await client.get("/health")
     assert response.status_code == 503
     assert response.json() == {"status": "loading"}
@@ -88,7 +88,7 @@ async def test_rerank_empty_passages(client, mock_reranker):
 
 
 def test_format_pair_contains_prefix_and_suffix():
-    from app import format_pair, PREFIX, SUFFIX, INSTRUCTION
+    from reranker_app import format_pair, PREFIX, SUFFIX, INSTRUCTION
     result = format_pair("test query", "test document")
     assert result.startswith(PREFIX)
     assert result.endswith(SUFFIX)
@@ -99,6 +99,6 @@ def test_format_pair_contains_prefix_and_suffix():
 
 
 def test_format_pair_contains_thinking_suppression():
-    from app import format_pair
+    from reranker_app import format_pair
     result = format_pair("q", "d")
     assert "<think>\n\n</think>\n\n" in result
