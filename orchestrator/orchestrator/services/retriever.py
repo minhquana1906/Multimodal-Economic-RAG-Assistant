@@ -66,6 +66,7 @@ class RetrieverClient:
                 results = await self.client.query_points(
                     collection_name=self.collection,
                     query=dense_vector,
+                    using=DENSE_VECTOR_NAME,
                     limit=top_k,
                     with_payload=True,
                 )
