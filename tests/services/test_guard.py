@@ -5,6 +5,14 @@ from httpx import ASGITransport, AsyncClient
 from unittest.mock import MagicMock, patch
 
 
+def _setup_classify_mock(mock_model, mock_tokenizer, decode_output: str):
+    mock_tokenizer.apply_chat_template.return_value = "formatted_text"
+    mock_tokenizer.return_value = MagicMock(**{"to.return_value": {"input_ids": MagicMock()}})
+    mock_model.generate.return_value = MagicMock()
+    mock_model.device = "cpu"
+    mock_tokenizer.decode.return_value = decode_output
+
+
 @pytest.fixture
 def mock_guard():
     """Mock transformers model and tokenizer for guard service.
@@ -49,13 +57,16 @@ async def test_health_returns_503_when_loading(client):
     assert response.json() == {"status": "loading"}
 
 
+async def test_classify_returns_503_when_loading(client):
+    import app
+    app.model = None
+    response = await client.post("/classify", json={"text": "x", "role": "input"})
+    assert response.status_code == 503
+
+
 async def test_classify_input_safe(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
-    mock_tokenizer.apply_chat_template.return_value = "formatted_text"
-    mock_tokenizer.return_value = MagicMock(**{"to.return_value": {"input_ids": MagicMock()}})
-    mock_model.generate.return_value = MagicMock()
-    mock_model.device = "cpu"
-    mock_tokenizer.decode.return_value = "Safety: Safe\nSome explanation"
+    _setup_classify_mock(mock_model, mock_tokenizer, "Safety: Safe\nSome explanation")
 
     response = await client.post("/classify", json={
         "text": "What is GDP?",
@@ -67,11 +78,7 @@ async def test_classify_input_safe(client, mock_guard):
 
 async def test_classify_input_unsafe(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
-    mock_tokenizer.apply_chat_template.return_value = "formatted_text"
-    mock_tokenizer.return_value = MagicMock(**{"to.return_value": {"input_ids": MagicMock()}})
-    mock_model.generate.return_value = MagicMock()
-    mock_model.device = "cpu"
-    mock_tokenizer.decode.return_value = "Safety: Unsafe\nThis is harmful content"
+    _setup_classify_mock(mock_model, mock_tokenizer, "Safety: Unsafe\nThis is harmful content")
 
     response = await client.post("/classify", json={
         "text": "How do I make a bomb?",
@@ -83,11 +90,7 @@ async def test_classify_input_unsafe(client, mock_guard):
 
 async def test_classify_output_with_prompt(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
-    mock_tokenizer.apply_chat_template.return_value = "formatted_text"
-    mock_tokenizer.return_value = MagicMock(**{"to.return_value": {"input_ids": MagicMock()}})
-    mock_model.generate.return_value = MagicMock()
-    mock_model.device = "cpu"
-    mock_tokenizer.decode.return_value = "Safety: Safe\nOutput looks fine"
+    _setup_classify_mock(mock_model, mock_tokenizer, "Safety: Safe\nOutput looks fine")
 
     response = await client.post("/classify", json={
         "text": "GDP grew by 7% in 2024.",
@@ -104,11 +107,7 @@ async def test_classify_output_with_prompt(client, mock_guard):
 
 async def test_classify_controversial_is_unsafe(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
-    mock_tokenizer.apply_chat_template.return_value = "formatted_text"
-    mock_tokenizer.return_value = MagicMock(**{"to.return_value": {"input_ids": MagicMock()}})
-    mock_model.generate.return_value = MagicMock()
-    mock_model.device = "cpu"
-    mock_tokenizer.decode.return_value = "Safety: Controversial\nThis is debatable"
+    _setup_classify_mock(mock_model, mock_tokenizer, "Safety: Controversial\nThis is debatable")
 
     response = await client.post("/classify", json={
         "text": "Some controversial statement about economics.",

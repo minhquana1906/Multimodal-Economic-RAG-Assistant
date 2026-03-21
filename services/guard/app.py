@@ -3,12 +3,13 @@ import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
+from typing import Literal
 
+import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
 
 
 MODEL_NAME = os.getenv("GUARD_MODEL", "Qwen/Qwen3Guard-Gen-0.6B")
@@ -42,8 +43,14 @@ async def health():
 
 class ClassifyRequest(BaseModel):
     text: str
-    role: str  # "input" or "output"
+    role: Literal["input", "output"]
     prompt: str | None = None  # Required when role == "output"
+
+    @model_validator(mode="after")
+    def prompt_required_for_output(self) -> "ClassifyRequest":
+        if self.role == "output" and not self.prompt:
+            raise ValueError("prompt is required when role is 'output'")
+        return self
 
 
 class ClassifyResponse(BaseModel):
