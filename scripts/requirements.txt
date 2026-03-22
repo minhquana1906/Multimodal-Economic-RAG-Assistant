@@ -1,5 +1,5 @@
-datasets==3.6.0
+datasets==4.8.3
 httpx==0.28.1
-qdrant-client==1.14.2
-fastembed==0.6.1
-underthesea==6.8.4
+qdrant-client==1.17.1
+fastembed==0.7.4
+underthesea==9.2.11
