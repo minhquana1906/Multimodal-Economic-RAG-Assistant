@@ -1,8 +1,9 @@
-import httpx
-import logging
-from langsmith import traceable
+from __future__ import annotations
 
-logger = logging.getLogger(__name__)
+import httpx
+from langsmith import traceable
+from loguru import logger
+
 
 class RerankerClient:
     def __init__(self, url: str, timeout: float):
@@ -10,14 +11,25 @@ class RerankerClient:
         self.timeout = timeout
 
     @traceable(name="Rerank Passages", run_type="chain")
-    async def rerank(self, query: str, passages: list[str], top_n: int = 5) -> list[dict]:
+    async def rerank(
+        self,
+        query: str,
+        passages: list[str],
+        top_n: int = 5,
+        instruction: str | None = None,
+    ) -> list[dict]:
         """Rerank passages by relevance. Returns list of {index, score} sorted desc.
         Falls back to original order if service unavailable."""
         try:
+            payload = {
+                "query": query,
+                "passages": passages,
+                "instruction": instruction,
+            }
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.url}/rerank",
-                    json={"query": query, "passages": passages},
+                    json=payload,
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
@@ -27,8 +39,16 @@ class RerankerClient:
                     key=lambda x: x["score"],
                     reverse=True,
                 )
-                return ranked[:top_n]
+                result = ranked[:top_n]
+                top_score = result[0]["score"] if result else 0.0
+                logger.log(
+                    "RERANK",
+                    "input={} output={} top_score={:.4f}",
+                    len(passages),
+                    len(result),
+                    top_score,
+                )
+                return result
         except Exception as e:
-            logger.error(f"Reranking error: {e}")
-            # Fallback: return original order with score=0
+            logger.error("Reranking error: {}", e)
             return [{"index": i, "score": 0.0} for i in range(min(len(passages), top_n))]

@@ -1,8 +1,9 @@
-import httpx
-import logging
-from langsmith import traceable
+from __future__ import annotations
 
-logger = logging.getLogger(__name__)
+import httpx
+from langsmith import traceable
+from loguru import logger
+
 
 class EmbedderClient:
     def __init__(self, url: str, timeout: float):
@@ -22,7 +23,7 @@ class EmbedderClient:
                 response.raise_for_status()
                 return response.json()["embeddings"][0]
         except Exception as e:
-            logger.error(f"Embedding error: {e}")
+            logger.error("Embedding error: {}", e)
             raise
 
     @traceable(name="Embed Documents", run_type="chain")
@@ -38,5 +39,5 @@ class EmbedderClient:
                 response.raise_for_status()
                 return response.json()["embeddings"]
         except Exception as e:
-            logger.error(f"Embedding error: {e}")
+            logger.error("Embedding error: {}", e)
             raise
