@@ -12,9 +12,11 @@ exits early without re-ingesting.
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
+import sys
 from typing import Any
+
+from loguru import logger
 
 import httpx
 from datasets import load_dataset
@@ -36,22 +38,22 @@ from chunker import chunk_article, make_chunk_id
 try:
     from langsmith import traceable
 except ImportError:  # LangSmith is optional at import time
+
     def traceable(name: str = ""):  # type: ignore[misc]
         def decorator(fn):
             return fn
+
         return decorator
+
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger.remove()
+logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
-os.environ.setdefault("LANGSMITH_PROJECT", "multimodal-rag-ingest")
+os.environ.setdefault("LANGSMITH_PROJECT", "multimodal-economic-rag-ingest")
 
 DATASET_NAME: str = "khoalnd/EconVNNews"
 EMBEDDING_URL: str = os.getenv("EMBEDDING_URL", "http://embedding:8001")
@@ -76,7 +78,9 @@ def tokenize_vietnamese(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def create_collection(client: QdrantClient, collection_name: str, dense_dim: int = DENSE_DIM) -> None:
+def create_collection(
+    client: QdrantClient, collection_name: str, dense_dim: int = DENSE_DIM
+) -> None:
     """Create a Qdrant collection with dense (COSINE) + sparse (BM25) vectors."""
     client.create_collection(
         collection_name=collection_name,
@@ -92,10 +96,14 @@ def create_collection(client: QdrantClient, collection_name: str, dense_dim: int
             ),
         },
     )
-    logger.info("Created collection '%s' (dense=%d, sparse=BM25)", collection_name, dense_dim)
+    logger.info(
+        "Created collection '%s' (dense=%d, sparse=BM25)", collection_name, dense_dim
+    )
 
 
-def should_skip_ingestion(client: QdrantClient, collection_name: str, expected_min: int = EXPECTED_MIN) -> bool:
+def should_skip_ingestion(
+    client: QdrantClient, collection_name: str, expected_min: int = EXPECTED_MIN
+) -> bool:
     """Return True if the collection already has enough points to skip re-ingestion."""
     try:
         info = client.get_collection(collection_name)
@@ -119,7 +127,9 @@ def should_skip_ingestion(client: QdrantClient, collection_name: str, expected_m
 
 
 @traceable(name="Get Dense Embeddings Batch")
-async def get_dense_embeddings(texts: list[str], is_query: bool = False) -> list[list[float]]:
+async def get_dense_embeddings(
+    texts: list[str], is_query: bool = False
+) -> list[list[float]]:
     """Fetch dense embeddings from the embedding service (async HTTP)."""
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
@@ -146,7 +156,9 @@ def load_and_chunk_articles() -> list[dict]:
         chunks = chunk_article(article)
         all_chunks.extend(chunks)
         if (i + 1) % 10_000 == 0:
-            logger.info("Chunked %d articles → %d chunks so far", i + 1, len(all_chunks))
+            logger.info(
+                "Chunked %d articles → %d chunks so far", i + 1, len(all_chunks)
+            )
 
     logger.info("Total: %d chunks from %d articles", len(all_chunks), len(dataset))
     return all_chunks
@@ -196,7 +208,9 @@ async def main() -> None:
         texts = [c["text"] for c in batch]
 
         # Dense embeddings
-        dense_vecs: list[list[float]] = await get_dense_embeddings(texts, is_query=False)
+        dense_vecs: list[list[float]] = await get_dense_embeddings(
+            texts, is_query=False
+        )
 
         # Sparse BM25 vectors
         sparse_vecs = _build_sparse_vectors(texts, bm25)
@@ -237,7 +251,11 @@ async def main() -> None:
                 total,
             )
 
-    logger.info("Ingestion complete! %d points upserted to '%s'.", points_upserted, COLLECTION_NAME)
+    logger.info(
+        "Ingestion complete! %d points upserted to '%s'.",
+        points_upserted,
+        COLLECTION_NAME,
+    )
 
 
 if __name__ == "__main__":

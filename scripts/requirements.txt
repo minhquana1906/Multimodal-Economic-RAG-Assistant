@@ -3,3 +3,4 @@ httpx==0.28.1
 qdrant-client==1.17.1
 fastembed==0.7.4
 underthesea==9.2.11
+loguru==0.7.3
