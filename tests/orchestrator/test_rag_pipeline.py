@@ -14,20 +14,16 @@ def _make_services(
 ):
     """Build a mock services object for RAG pipeline tests."""
     services = MagicMock()
-
     services.guard.check_input = AsyncMock(return_value=input_safe)
     services.guard.check_output = AsyncMock(return_value=output_safe)
-
     if embed_raises:
         services.embedder.embed_query = AsyncMock(side_effect=Exception("embed down"))
     else:
         services.embedder.embed_query = AsyncMock(return_value=embed_vector or [0.1] * 1024)
-
     services.retriever.hybrid_search = AsyncMock(return_value=retrieved_docs or [])
     services.reranker.rerank = AsyncMock(return_value=reranked or [])
     services.web_search.search = AsyncMock(return_value=web_results or [])
     services.llm.generate = AsyncMock(return_value=answer)
-
     return services
 
 
@@ -38,14 +34,23 @@ def _make_config(
     fallback_score_threshold=0.5,
     no_context_message="Xin lỗi, tôi không tìm thấy thông tin liên quan.",
     guard_error_message="Xin lỗi, yêu cầu của bạn không thể xử lý.",
+    apology_message="Xin lỗi, tôi không thể trả lời câu hỏi này theo nội dung của chúng tôi.",
 ):
     config = MagicMock()
-    config.retrieval_top_k = retrieval_top_k
-    config.rerank_top_n = rerank_top_n
-    config.fallback_min_chunks = fallback_min_chunks
-    config.fallback_score_threshold = fallback_score_threshold
-    config.no_context_message = no_context_message
-    config.guard_error_message = guard_error_message
+    config.rag = MagicMock()
+    config.rag.retrieval_top_k = retrieval_top_k
+    config.rag.rerank_top_n = rerank_top_n
+    config.rag.fallback_min_chunks = fallback_min_chunks
+    config.rag.fallback_score_threshold = fallback_score_threshold
+    config.rag.context_limit = 5
+    config.rag.citation_limit = 5
+    config.prompts = MagicMock()
+    config.prompts.system_prompt = "You are a test assistant."
+    config.prompts.user_template = "Context:\n{context}\n\nQuestion: {question}"
+    config.prompts.no_context_message = no_context_message
+    config.prompts.guard_error_message = guard_error_message
+    config.prompts.apology_message = apology_message
+    config.prompts.reranker_instruction = "Rank by relevance."
     return config
 
 
@@ -73,7 +78,6 @@ async def test_rag_pipeline_happy_path():
     retrieved = [{"id": "1", "text": "GDP text", "source": "src.com", "title": "GDP", "score": 0.9}]
     reranked = [{"index": 0, "score": 0.9}]
 
-    # Use fallback_min_chunks=1 so the single reranked doc doesn't trigger web fallback
     services = _make_services(
         input_safe=True,
         retrieved_docs=retrieved,
@@ -97,7 +101,7 @@ async def test_rag_pipeline_happy_path():
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_unsafe_input():
-    """Unsafe input: guard returns False → pipeline ends early, LLM never called."""
+    """Unsafe input: guard returns False → apology_message returned, LLM never called."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     services = _make_services(input_safe=False)
@@ -107,7 +111,7 @@ async def test_rag_pipeline_unsafe_input():
     result = await graph.ainvoke(_initial_state())
 
     assert result["input_safe"] is False
-    assert result["answer"] == ""
+    assert result["answer"] == config.prompts.apology_message
     services.llm.generate.assert_not_called()
     services.embedder.embed_query.assert_not_called()
 
@@ -123,13 +127,12 @@ async def test_rag_pipeline_no_context():
         reranked=[],
         web_results=[],
     )
-    # fallback_min_chunks=0 ensures web fallback doesn't run (no retrieval = already tested separately)
     config = _make_config(fallback_min_chunks=0)
     graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["answer"] == config.no_context_message
+    assert result["answer"] == config.prompts.no_context_message
     services.llm.generate.assert_not_called()
 
 
@@ -199,5 +202,5 @@ async def test_rag_pipeline_unsafe_output():
     result = await graph.ainvoke(_initial_state())
 
     assert result["output_safe"] is False
-    assert result["answer"] == config.guard_error_message
-    assert result["citations"] == []  # citations not built when output blocked
+    assert result["answer"] == config.prompts.guard_error_message
+    assert result["citations"] == []
