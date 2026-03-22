@@ -1,36 +1,52 @@
-from openai import AsyncOpenAI
-import logging
-from langsmith import traceable
+from __future__ import annotations
 
-logger = logging.getLogger(__name__)
+import time
+
+from langsmith import traceable
+from loguru import logger
+from openai import AsyncOpenAI
 
 
 class LLMClient:
-    def __init__(self, base_url: str, api_key: str = "fake", timeout: float = 60.0):
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-        # timeout is wired into AsyncOpenAI; no need to store separately
+    def __init__(
+        self,
+        url: str,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        timeout: float,
+    ):
+        self._model = model
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._client = AsyncOpenAI(base_url=url, api_key="fake", timeout=timeout)
 
     @traceable(name="Generate Answer", run_type="llm")
-    async def generate(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        temperature: float = 0.7,
-        max_tokens: int = 512,
-    ) -> str:
+    async def generate(self, system_prompt: str, user_prompt: str) -> str:
         """Generate response from remote LLM. Returns Vietnamese error message on failure."""
+        t0 = time.monotonic()
         try:
-            response = await self.client.chat.completions.create(
-                model="Qwen/Qwen3.5-4B",
+            response = await self._client.chat.completions.create(
+                model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=temperature,
-                max_tokens=max_tokens,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            tokens = response.usage.completion_tokens if response.usage else 0
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            logger.log(
+                "LLM",
+                "model={} tokens={} latency_ms={}",
+                self._model,
+                tokens,
+                latency_ms,
+            )
+            return content
         except Exception as e:
-            logger.error(f"LLM generation error: {e}")
+            logger.error("LLM generation error: {}", e)
             return "Xin lỗi, không thể tạo phản hồi."
