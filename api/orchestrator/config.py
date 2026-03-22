@@ -30,6 +30,11 @@ class ServicesConfig(BaseModel):
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection: str = "econ_vn_news"
 
+    # ASR Service (on-demand, profile: audio)
+    asr_url: str = ""
+    asr_timeout: float = 30.0
+    asr_max_duration_s: int = 60
+
 
 class RAGConfig(BaseModel):
     retrieval_top_k: int = 20
