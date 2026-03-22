@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .abbreviations import ECONOMIC_ABBREVIATIONS
+from abbreviations import ECONOMIC_ABBREVIATIONS
 
 # ── Vietnamese digit names ────────────────────────────────────────────
 

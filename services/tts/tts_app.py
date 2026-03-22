@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 
-from .text_preprocessor import preprocess
+from text_preprocessor import preprocess
 
 logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
