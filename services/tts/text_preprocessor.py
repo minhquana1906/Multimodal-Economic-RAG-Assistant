@@ -89,15 +89,16 @@ def _read_integer(n: int) -> str:
     trieu, remainder = divmod(remainder, 1_000_000)
     if trieu > 0:
         parts.append(_read_three_digits(trieu) + " triệu")
-    elif ty > 0 and remainder > 0:
-        # need placeholder so listener knows scale
-        pass
+    elif ty > 0 and (remainder > 0 or trieu == 0):
+        # Zero group placeholder so listener distinguishes scale
+        if remainder > 0:
+            parts.append("không triệu")
 
     nghin, don_vi = divmod(remainder, 1_000)
     if nghin > 0:
         parts.append(_read_three_digits(nghin) + " nghìn")
     elif (ty > 0 or trieu > 0) and don_vi > 0:
-        pass
+        parts.append("không nghìn")
 
     if don_vi > 0:
         # If don_vi < 100 and there are higher groups, we need "không trăm ..."
@@ -142,19 +143,19 @@ def normalize_numbers(text: str) -> str:
 
     text = re.sub(r"[Qq](\d)[/\-](\d{4})", _quarter, text)
 
-    # Decimal numbers (use comma or dot as decimal separator)
-    def _decimal(m: re.Match) -> str:
-        return _read_decimal_or_int(m.group(0))
-
-    text = re.sub(r"\d+[.,]\d+", _decimal, text)
-
-    # Integers with thousand separators: 1,000,000 or 1.000.000
-    # (only match if not already converted — look for standalone patterns)
+    # Integers with thousand separators MUST run before decimal regex,
+    # otherwise "1,000,000" would be matched as decimal "1,000" first.
     def _int_with_sep(m: re.Match) -> str:
         raw = m.group(0).replace(",", "").replace(".", "")
         return _read_integer(int(raw))
 
     text = re.sub(r"\d{1,3}(?:[.,]\d{3})+(?![.,]\d)", _int_with_sep, text)
+
+    # Decimal numbers (use comma or dot as decimal separator)
+    def _decimal(m: re.Match) -> str:
+        return _read_decimal_or_int(m.group(0))
+
+    text = re.sub(r"\d+[.,]\d+", _decimal, text)
 
     # Plain integers
     def _plain_int(m: re.Match) -> str:
