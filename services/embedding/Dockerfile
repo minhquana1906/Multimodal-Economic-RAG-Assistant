@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12 python3.12-dev python3-pip \
@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir torch==2.3.1+cu121 \
-    --index-url https://download.pytorch.org/whl/cu121 \
+RUN pip install --no-cache-dir torch==2.10.0+cu128 \
+    --index-url https://download.pytorch.org/whl/cu128 \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY embedding_app.py .
