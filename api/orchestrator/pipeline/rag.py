@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, Literal
-import logging
 from langsmith import traceable
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class RAGState(TypedDict):
@@ -36,7 +34,13 @@ def build_rag_graph(services, config):
 
     @traceable(name="Input Guard Check")
     async def input_guard_node(state: RAGState) -> dict:
-        return {"input_safe": await services.guard.check_input(state["query"])}
+        safe = await services.guard.check_input(state["query"])
+        if not safe:
+            return {
+                "input_safe": False,
+                "answer": config.prompts.apology_message,
+            }
+        return {"input_safe": True}
 
     @traceable(name="Query Embedding")
     async def embed_node(state: RAGState) -> dict:
@@ -44,14 +48,14 @@ def build_rag_graph(services, config):
             embeddings = await services.embedder.embed_query(state["query"])
             return {"embeddings": embeddings}
         except Exception as e:
-            logger.error(f"Embedding failed: {e}")
+            logger.error("Embedding failed: {}", e)
             return {"error": str(e)}
 
     @traceable(name="Document Retrieval")
     async def retrieve_node(state: RAGState) -> dict:
         docs = await services.retriever.hybrid_search(
             dense_vector=state["embeddings"],
-            top_k=config.retrieval_top_k,
+            top_k=config.rag.retrieval_top_k,
         )
         return {"retrieved_docs": docs}
 
@@ -63,27 +67,27 @@ def build_rag_graph(services, config):
         ranked = await services.reranker.rerank(
             query=state["query"],
             passages=passages,
-            top_n=config.rerank_top_n,
+            top_n=config.rag.rerank_top_n,
+            instruction=config.prompts.reranker_instruction,
         )
         return {"reranked_docs": ranked}
 
     @traceable(name="Web Search Fallback")
     async def web_fallback_node(state: RAGState) -> dict:
         needs_fallback = (
-            len(state["reranked_docs"]) < config.fallback_min_chunks
+            len(state["reranked_docs"]) < config.rag.fallback_min_chunks
             or (
                 state["reranked_docs"]
-                and state["reranked_docs"][0]["score"] < config.fallback_score_threshold
+                and state["reranked_docs"][0]["score"] < config.rag.fallback_score_threshold
             )
         )
         if needs_fallback:
             web_results = await services.web_search.search(state["query"])
             return {"web_results": web_results}
-        return {"web_results": []}  # explicitly clear stale results
+        return {"web_results": []}
 
     @traceable(name="Combine Context")
     async def combine_context_node(state: RAGState) -> dict:
-        # Resolve reranked doc indices back to full doc dicts (guard both bounds)
         reranked = [
             state["retrieved_docs"][r["index"]]
             for r in state["reranked_docs"]
@@ -95,19 +99,18 @@ def build_rag_graph(services, config):
     @traceable(name="LLM Generation")
     async def generate_node(state: RAGState) -> dict:
         if not state["final_context"]:
-            return {"answer": config.no_context_message}
+            return {"answer": config.prompts.no_context_message}
 
         context_text = "\n\n".join([
             f"[{c.get('title', 'N/A')}] {c.get('text', '')}"
-            for c in state["final_context"][:5]
+            for c in state["final_context"][:config.rag.context_limit]
         ])
-        user_prompt = (
-            f"Dựa trên thông tin sau, hãy trả lời câu hỏi:\n\n"
-            f"Thông tin:\n{context_text}\n\n"
-            f"Câu hỏi: {state['query']}\n\nTrả lời:"
+        user_prompt = config.prompts.user_template.format(
+            context=context_text,
+            question=state["query"],
         )
         answer = await services.llm.generate(
-            system_prompt="Bạn là trợ lý AI chuyên về kinh tế tài chính Việt Nam.",
+            system_prompt=config.prompts.system_prompt,
             user_prompt=user_prompt,
         )
         return {"answer": answer}
@@ -119,29 +122,29 @@ def build_rag_graph(services, config):
             prompt=state["query"],
         )
         if not output_safe:
-            return {"output_safe": False, "answer": config.guard_error_message}
+            return {
+                "output_safe": False,
+                "answer": config.prompts.guard_error_message,
+            }
         return {"output_safe": True}
 
     @traceable(name="Build Citations")
     async def citations_node(state: RAGState) -> dict:
         citations = [
             {"title": c.get("title", ""), "source": c.get("source", "")}
-            for c in state["final_context"][:5]
+            for c in state["final_context"][:config.rag.citation_limit]
         ]
         return {"citations": citations}
 
     # --- Routing functions ---
 
     def route_after_input_guard(state: RAGState) -> Literal["embed", "__end__"]:
-        """Route to embed if input is safe, otherwise end pipeline."""
         return "embed" if state["input_safe"] else "__end__"
 
     def route_after_embed(state: RAGState) -> Literal["retrieve", "__end__"]:
-        """Route to retrieve if embedding succeeded, otherwise end to avoid wasted calls."""
         return "__end__" if state.get("error") else "retrieve"
 
     def route_after_output_guard(state: RAGState) -> Literal["citations", "__end__"]:
-        """Route to citations only if output is safe; skip citations on blocked responses."""
         return "citations" if state["output_safe"] else "__end__"
 
     # --- Build graph ---
