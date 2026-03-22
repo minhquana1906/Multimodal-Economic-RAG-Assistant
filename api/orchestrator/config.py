@@ -32,12 +32,14 @@ class Settings(BaseSettings):
 
     # LangSmith
     langsmith_api_key: str | None = None
-    langsmith_project: str = "multimodal-rag"
+    langsmith_project: str = "multimodal-economic-rag"
 
     # Web search
     tavily_api_key: str | None = None
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
 
 @lru_cache()

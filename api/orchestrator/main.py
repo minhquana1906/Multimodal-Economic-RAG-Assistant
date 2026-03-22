@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/models")
     async def models():
-        return {"data": [{"id": "multimodal-rag", "object": "model"}]}
+        return {"data": [{"id": "multimodal-economic-rag", "object": "model"}]}
 
     return app
 
