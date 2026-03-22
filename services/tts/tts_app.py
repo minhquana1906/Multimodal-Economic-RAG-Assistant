@@ -23,7 +23,7 @@ import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from text_preprocessor import preprocess
 
@@ -144,8 +144,20 @@ app = FastAPI(title="TTS Service", lifespan=lifespan)
 # ── Request / Response Models ─────────────────────────────────────────
 class SynthesizeRequest(BaseModel):
     text: str
-    speed: float = DEFAULT_SPEED
-    sample_rate: int = SAMPLE_RATE
+    speed: float = Field(
+        default=DEFAULT_SPEED,
+        ge=0.1,
+        le=2.0,
+        description=(
+            "Controls synthesis variation via model temperature. "
+            "VieNeu-TTS does not expose a direct speed parameter; "
+            "higher values produce more varied prosody. Default 1.0."
+        ),
+    )
+    sample_rate: int = Field(
+        default=SAMPLE_RATE,
+        description="Output WAV sample rate in Hz. Native model rate is 24000.",
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────

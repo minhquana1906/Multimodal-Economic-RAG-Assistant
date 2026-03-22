@@ -232,3 +232,53 @@ def test_text_preprocessor_preprocess_pipeline():
     assert "Tổng sản phẩm quốc nội" in full_text
     # 6.5% should have been normalized
     assert "phần trăm" in full_text
+
+
+# ── Stream Endpoint Tests ────────────────────────────────────────────
+
+
+async def test_stream_returns_sse_events(client_with_model):
+    """POST /stream returns SSE events with base64 audio chunks."""
+    import json
+    import base64
+
+    client, mock_model = client_with_model
+
+    with patch(
+        "tts_app.on_demand.get_model",
+        new_callable=AsyncMock,
+        return_value=mock_model,
+    ):
+        response = await client.post(
+            "/stream",
+            json={"text": "Xin chào. Tạm biệt."},
+        )
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+
+    # Parse SSE events from response body
+    body = response.text
+    events = [
+        line.removeprefix("data: ")
+        for line in body.strip().split("\n")
+        if line.startswith("data: ")
+    ]
+
+    # Should have at least 2 sentence events + 1 done event
+    assert len(events) >= 2
+
+    # Last event should be the done signal
+    last_event = json.loads(events[-1])
+    assert last_event.get("done") is True
+
+    # First event should contain base64 audio and sentence text
+    first_event = json.loads(events[0])
+    assert "audio" in first_event
+    assert "sentence" in first_event
+    assert "index" in first_event
+    assert first_event["index"] == 0
+
+    # Verify the audio is valid base64
+    audio_bytes = base64.b64decode(first_event["audio"])
+    assert audio_bytes[:4] == b"RIFF"  # WAV header
