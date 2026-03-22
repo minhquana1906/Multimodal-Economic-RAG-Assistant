@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import logging
+import uuid
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from loguru import logger
 
 from orchestrator.models.schemas import (
     ChatRequest,
@@ -13,8 +14,6 @@ from orchestrator.models.schemas import (
     ChatStreamChunk,
 )
 from orchestrator.pipeline.rag import RAGState
-
-logger = logging.getLogger(__name__)
 
 
 def _build_initial_state(query: str) -> RAGState:
@@ -47,7 +46,10 @@ def create_chat_router(rag_graph) -> APIRouter:
         if not user_message:
             raise HTTPException(status_code=400, detail="No user message found")
 
-        result = await rag_graph.ainvoke(_build_initial_state(user_message))
+        request_id = str(uuid.uuid4())[:8]
+        with logger.contextualize(request_id=request_id):
+            result = await rag_graph.ainvoke(_build_initial_state(user_message))
+
         answer: str = result.get("answer", "")
         citations: list[dict] = result.get("citations", [])
 
