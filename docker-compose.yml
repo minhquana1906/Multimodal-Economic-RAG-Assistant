@@ -245,3 +245,40 @@ services:
       start_period: 10s
     profiles:
       - audio
+
+  # === TTS Service (GPU, on-demand loading) ===
+  tts:
+    build:
+      context: ./services/tts
+    hostname: tts
+    ports:
+      - "8006:8006"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
+      - TTS_MODEL=${SERVICES__TTS_MODEL:-pnnbao-ump/VieNeu-TTS}
+      - TTS_IDLE_TIMEOUT=${SERVICES__TTS_IDLE_TIMEOUT:-300}
+      - TTS_SAMPLE_RATE=${SERVICES__TTS_SAMPLE_RATE:-24000}
+      - TTS_SPEED=${SERVICES__TTS_SPEED:-1.0}
+    networks:
+      - rag-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - audio
