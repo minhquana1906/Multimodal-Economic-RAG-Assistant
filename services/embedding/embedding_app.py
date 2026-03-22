@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import os
 import sys
 from contextlib import asynccontextmanager
