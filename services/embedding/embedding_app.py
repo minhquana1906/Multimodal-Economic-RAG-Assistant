@@ -1,12 +1,17 @@
 import asyncio
 import functools
 import os
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
+from loguru import logger
+
+logger.remove()
+logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 model: SentenceTransformer | None = None

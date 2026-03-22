@@ -2,6 +2,7 @@
 import asyncio
 import os
 import re
+import sys
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -10,7 +11,10 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from loguru import logger
 
+logger.remove()
+logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
 MODEL_NAME = os.getenv("GUARD_MODEL", "Qwen/Qwen3Guard-Gen-0.6B")
 model = None
