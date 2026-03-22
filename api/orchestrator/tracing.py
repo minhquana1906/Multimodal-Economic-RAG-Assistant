@@ -54,7 +54,7 @@ def setup_logging(config: ObservabilityConfig) -> None:
         try:
             logger.level(name, no=no, color=color)
         except (TypeError, ValueError):
-            pass  # already registered
+            pass  # already registered (loguru raises ValueError on duplicate name)
 
     # Intercept stdlib logging → loguru (covers uvicorn, httpx, qdrant-client)
     logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
