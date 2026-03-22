@@ -2,7 +2,7 @@
 conftest.py for orchestrator tests.
 
 The orchestrator Python package lives inside the Docker build-context directory
-orchestrator/orchestrator/.  We add that build-context directory to sys.path so
+api/orchestrator/.  We add that build-context directory (api/) to sys.path so
 that `import orchestrator` resolves correctly when running tests from the repo root.
 """
 import sys
