@@ -35,6 +35,11 @@ class ServicesConfig(BaseModel):
     asr_timeout: float = 30.0
     asr_max_duration_s: int = 60
 
+    # TTS Service (on-demand, profile: audio)
+    tts_url: str = ""
+    tts_timeout: float = 30.0
+    tts_speed: float = 1.0
+
 
 class RAGConfig(BaseModel):
     retrieval_top_k: int = 20
