@@ -145,6 +145,7 @@ app = FastAPI(title="TTS Service", lifespan=lifespan)
 class SynthesizeRequest(BaseModel):
     text: str
     speed: float = DEFAULT_SPEED
+    sample_rate: int = SAMPLE_RATE
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -154,6 +155,22 @@ def _audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> by
     sf.write(buf, audio, sample_rate, format="WAV")
     buf.seek(0)
     return buf.read()
+
+
+def _resample_if_needed(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    """Resample audio if the requested sample rate differs from the model output."""
+    if orig_sr == target_sr:
+        return audio
+    try:
+        import torchaudio
+
+        waveform = torch.from_numpy(audio).unsqueeze(0)
+        resampler = torchaudio.transforms.Resample(orig_freq=orig_sr, new_freq=target_sr)
+        resampled = resampler(waveform)
+        return resampled.squeeze(0).numpy()
+    except ImportError:
+        logger.warning("torchaudio not available for resampling, returning native sample rate")
+        return audio
 
 
 # ── Health Endpoint ────────────────────────────────────────────────────
@@ -178,12 +195,17 @@ async def synthesize(req: SynthesizeRequest):
     if not sentences:
         return JSONResponse({"detail": "No speakable text after preprocessing"}, status_code=400)
 
-    logger.info("Synthesizing {} sentence(s), speed={}", len(sentences), req.speed)
+    logger.info(
+        "Synthesizing {} sentence(s), speed={}, sample_rate={}",
+        len(sentences), req.speed, req.sample_rate,
+    )
 
     # Get model (loads on-demand if needed)
     tts = await on_demand.get_model()
 
     # Synthesize each sentence and concatenate
+    # Note: VieNeu-TTS does not expose a direct "speed" parameter.
+    # We pass speed as temperature (higher = more variation / faster pacing).
     t0 = time.monotonic()
     audio_chunks: list[np.ndarray] = []
 
@@ -207,8 +229,13 @@ async def synthesize(req: SynthesizeRequest):
         return JSONResponse({"detail": "No audio generated"}, status_code=500)
 
     full_audio = np.concatenate(audio_chunks)
+
+    # Resample if client requested a different sample rate
+    output_sr = req.sample_rate
+    full_audio = _resample_if_needed(full_audio, SAMPLE_RATE, output_sr)
+
     elapsed = time.monotonic() - t0
-    duration_s = len(full_audio) / SAMPLE_RATE
+    duration_s = len(full_audio) / output_sr
 
     logger.info(
         "TTS: {} sentences, duration={:.1f}s, latency={:.1f}s",
@@ -218,7 +245,7 @@ async def synthesize(req: SynthesizeRequest):
     )
 
     # Convert to WAV
-    wav_bytes = await asyncio.to_thread(_audio_to_wav_bytes, full_audio)
+    wav_bytes = await asyncio.to_thread(_audio_to_wav_bytes, full_audio, output_sr)
 
     return Response(
         content=wav_bytes,
@@ -238,7 +265,12 @@ async def stream(req: SynthesizeRequest):
     if not sentences:
         return JSONResponse({"detail": "No speakable text after preprocessing"}, status_code=400)
 
-    logger.info("Streaming {} sentence(s), speed={}", len(sentences), req.speed)
+    logger.info(
+        "Streaming {} sentence(s), speed={}, sample_rate={}",
+        len(sentences), req.speed, req.sample_rate,
+    )
+
+    output_sr = req.sample_rate
 
     async def event_generator():
         tts = await on_demand.get_model()
@@ -250,7 +282,8 @@ async def stream(req: SynthesizeRequest):
                     text=sentence,
                     temperature=req.speed,
                 )
-                wav_bytes = _audio_to_wav_bytes(chunk)
+                chunk = _resample_if_needed(chunk, SAMPLE_RATE, output_sr)
+                wav_bytes = _audio_to_wav_bytes(chunk, output_sr)
                 b64_audio = base64.b64encode(wav_bytes).decode("ascii")
 
                 event_data = json.dumps(
