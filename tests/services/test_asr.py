@@ -197,3 +197,66 @@ async def test_transcribe_returns_500_on_inference_error(client_with_model):
             )
     assert response.status_code == 500
     assert "failed" in response.json()["detail"].lower()
+
+
+async def test_unload_frees_model(mock_qwen_asr_model):
+    """POST /unload unloads the model and health returns 'idle'."""
+    import asr_app
+    importlib.reload(asr_app)
+    # Simulate loaded model
+    asr_app.on_demand.model = mock_qwen_asr_model
+
+    transport = ASGITransport(app=asr_app.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        # Confirm model is loaded
+        resp = await c.get("/health")
+        assert resp.json()["model_loaded"] is True
+
+        # Unload
+        with patch("torch.cuda.empty_cache"):
+            resp = await c.post("/unload")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "unloaded"
+
+        # Confirm model is gone
+        resp = await c.get("/health")
+        assert resp.json()["model_loaded"] is False
+
+
+async def test_unload_when_already_idle(client):
+    """POST /unload when model not loaded returns 200 with status='already_idle'."""
+    response = await client.post("/unload")
+    assert response.status_code == 200
+    assert response.json()["status"] == "already_idle"
+
+
+async def test_on_demand_model_loading_lock():
+    """Concurrent get_model calls only load once (lock prevents double-load)."""
+    import asr_app
+    importlib.reload(asr_app)
+
+    load_count = 0
+    original_model = MagicMock()
+
+    async def mock_load(*args, **kwargs):
+        nonlocal load_count
+        load_count += 1
+        await asyncio.sleep(0.1)  # Simulate slow load
+        return original_model
+
+    odm = asr_app.OnDemandModel()
+    odm._load_model = MagicMock()  # Won't be used directly
+
+    with patch.object(odm, "_load_model", return_value=original_model):
+        with patch("asyncio.to_thread", side_effect=mock_load):
+            # Launch 3 concurrent get_model calls
+            results = await asyncio.gather(
+                odm.get_model(),
+                odm.get_model(),
+                odm.get_model(),
+            )
+
+    # Model should only be loaded once
+    assert load_count == 1
+    # All results should be the same model
+    assert all(r is original_model for r in results)

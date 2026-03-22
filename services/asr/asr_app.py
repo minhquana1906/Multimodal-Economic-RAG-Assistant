@@ -225,3 +225,13 @@ async def transcribe(
         return JSONResponse({"detail": "Could not transcribe audio — empty result"}, status_code=400)
 
     return TranscribeResponse(text=text, language=language, duration_seconds=round(duration_s, 2))
+
+
+# ── Unload Endpoint ────────────────────────────────────────────────────
+@app.post("/unload")
+async def unload():
+    """Explicitly unload model to free VRAM (used by orchestrator before TTS)."""
+    if not on_demand.is_loaded:
+        return JSONResponse({"status": "already_idle"})
+    await on_demand.unload()
+    return JSONResponse({"status": "unloaded"})
