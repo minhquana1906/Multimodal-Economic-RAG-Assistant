@@ -1,0 +1,103 @@
+stateDiagram-v2
+    [*] --> normalize_input: START
+
+    state normalize_input {
+        [*] --> detect_modality
+        detect_modality --> route_modality
+    }
+
+    normalize_input --> asr_node: audio
+    normalize_input --> vlm_query_node: image
+    normalize_input --> input_guard: text
+
+    state asr_node {
+        [*] --> transcribe_audio
+        transcribe_audio --> set_query_text
+    }
+
+    state vlm_query_node {
+        [*] --> analyze_image
+        analyze_image --> set_query_text2: description
+    }
+
+    asr_node --> input_guard: query = transcribed text
+    vlm_query_node --> input_guard: query = VLM description
+
+    state input_guard {
+        [*] --> classify_input
+        classify_input --> safe_check
+    }
+
+    input_guard --> embed: safe
+    input_guard --> [*]: unsafe → apology
+
+    state embed {
+        [*] --> embed_query
+        embed_query --> dense_vector_1024d
+    }
+
+    embed --> retrieve: embeddings
+    embed --> [*]: error
+
+    state retrieve {
+        [*] --> search_econ_vn_news
+        [*] --> search_econ_knowledge
+        search_econ_vn_news --> merge_results
+        search_econ_knowledge --> merge_results
+    }
+
+    retrieve --> rerank
+
+    state rerank {
+        [*] --> score_passages
+        score_passages --> select_top_n
+    }
+
+    rerank --> web_fallback
+
+    state web_fallback {
+        [*] --> evaluate_quality
+        evaluate_quality --> tavily_search: low quality
+        evaluate_quality --> skip: sufficient quality
+    }
+
+    web_fallback --> combine_context
+
+    state combine_context {
+        [*] --> merge_qdrant_web
+        merge_qdrant_web --> limit_context
+    }
+
+    combine_context --> generate
+
+    state generate {
+        [*] --> build_prompt
+        build_prompt --> llm_inference
+        llm_inference --> answer_text
+    }
+
+    generate --> output_guard
+
+    state output_guard {
+        [*] --> classify_output
+        classify_output --> output_safe_check
+    }
+
+    output_guard --> citations: safe
+    output_guard --> [*]: unsafe → error message
+
+    state citations {
+        [*] --> extract_sources
+        extract_sources --> format_citations
+    }
+
+    citations --> format_output
+
+    state format_output {
+        [*] --> check_response_format
+        check_response_format --> tts_synthesize: audio requested
+        check_response_format --> text_only: text only
+        tts_synthesize --> combine_text_audio
+    }
+
+    format_output --> [*]: END (text + optional audio)

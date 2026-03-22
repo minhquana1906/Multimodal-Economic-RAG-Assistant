@@ -1,0 +1,74 @@
+sequenceDiagram
+    actor User
+    participant WebUI as Open WebUI
+    participant Orch as Orchestrator
+    participant ASR as ASR Service
+    participant Guard as Guard Service
+    participant Emb as Embedding Service
+    participant QD1 as Qdrant<br/>(econ_vn_news)
+    participant QD2 as Qdrant<br/>(econ_knowledge)
+    participant RR as Reranker Service
+    participant LLM as vLLM (remote)
+    participant TTS as TTS Service
+
+    User->>WebUI: 🎤 Voice message (WAV)
+    WebUI->>Orch: POST /v1/chat/completions<br/>(multipart: audio + response_format=text+audio)
+
+    rect rgb(255, 240, 240)
+        Note over Orch: normalize_input → detect audio
+        Orch->>ASR: POST /transcribe (audio bytes)
+        Note over ASR: Load model if idle<br/>(cold start ~5-8s)
+        ASR-->>Orch: {"text": "GDP Việt Nam năm 2023?"}
+    end
+
+    rect rgb(240, 255, 240)
+        Note over Orch: input_guard
+        Orch->>Guard: POST /classify (role=input)
+        Guard-->>Orch: {"label": "safe"}
+    end
+
+    rect rgb(240, 240, 255)
+        Note over Orch: embed
+        Orch->>Emb: POST /embed (query, is_query=true)
+        Emb-->>Orch: {"embeddings": [1024d vector]}
+    end
+
+    rect rgb(255, 255, 240)
+        Note over Orch: retrieve (multi-collection, parallel)
+        par Search both collections
+            Orch->>QD1: hybrid_search(dense+sparse, top-10)
+            QD1-->>Orch: 10 chunks from news
+        and
+            Orch->>QD2: hybrid_search(dense+sparse, top-10)
+            QD2-->>Orch: 10 chunks from knowledge<br/>(may include chart/table chunks)
+        end
+        Note over Orch: Merge 20 candidates
+    end
+
+    rect rgb(240, 255, 255)
+        Note over Orch: rerank
+        Orch->>RR: POST /rerank (query, 20 passages)
+        RR-->>Orch: top-5 scored
+    end
+
+    rect rgb(255, 240, 255)
+        Note over Orch: generate
+        Orch->>LLM: POST /v1/chat/completions<br/>(system prompt + context + query)
+        LLM-->>Orch: "GDP Việt Nam năm 2023 đạt 5.05%..."
+    end
+
+    rect rgb(240, 255, 240)
+        Note over Orch: output_guard
+        Orch->>Guard: POST /classify (role=output)
+        Guard-->>Orch: {"label": "safe"}
+    end
+
+    rect rgb(255, 240, 240)
+        Note over Orch: format_output (audio requested)
+        Orch->>TTS: POST /synthesize (answer text)
+        Note over TTS: Load model if idle
+        TTS-->>Orch: audio/wav bytes
+    end
+
+    Orch-->>WebUI: SSE stream: text + citations<br/>+ audio (base64 WAV)
+    WebUI-->>User: 📝 Text answer + 🔊 Audio playback

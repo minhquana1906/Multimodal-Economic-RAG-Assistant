@@ -1,0 +1,54 @@
+graph TB
+    subgraph Internet["🌐 Internet"]
+        vastai["vast.ai Remote GPU<br/>vLLM: Qwen3.5-4B :8004<br/>VLM: Qwen3-VL-4B :8007"]
+        tavily["Tavily Web Search API"]
+    end
+
+    subgraph Local["🖥️ Local Machine (RTX 3060 12GB)"]
+        subgraph DockerNet["Docker Bridge: rag-net"]
+            subgraph AlwaysOn["Always On (~3.6 GB VRAM)"]
+                emb["Embedding :8001<br/>Qwen3-Embedding-0.6B<br/>1.2 GB"]
+                rrk["Reranker :8002<br/>Qwen3-Reranker-0.6B<br/>1.2 GB"]
+                grd["Guard :8003<br/>Qwen3Guard-Gen-0.6B<br/>1.2 GB"]
+            end
+
+            subgraph OnDemand["On-Demand (~5.4-6.4 GB VRAM)"]
+                asr["ASR :8005<br/>Qwen3-ASR-1.7B<br/>3.4 GB"]
+                tts["TTS :8006<br/>VieNeu-1000h<br/>2-3 GB"]
+            end
+
+            orch["Orchestrator :8000<br/>FastAPI + LangGraph"]
+            qdrant["Qdrant :6333<br/>• econ_vn_news<br/>• econ_knowledge"]
+            webui["Open WebUI :8080"]
+            tunnel["Cloudflare Tunnel<br/>→ quannguyen.works"]
+        end
+
+        subgraph DataStore["Data Store (local filesystem)"]
+            raw["data/raw/"]
+            parsed["data/parsed/"]
+            images["data/images/"]
+        end
+    end
+
+    %% Connections
+    webui --> orch
+    tunnel --> webui
+    orch --> emb
+    orch --> rrk
+    orch --> grd
+    orch --> asr
+    orch --> tts
+    orch --> qdrant
+    orch --> vastai
+    orch --> tavily
+
+    %% Styling
+    classDef gpu fill:#ff6b6b,color:#fff
+    classDef service fill:#4ecdc4,color:#fff
+    classDef storage fill:#45b7d1,color:#fff
+    classDef remote fill:#f9ca24,color:#333
+
+    class emb,rrk,grd,asr,tts gpu
+    class orch,webui,tunnel service
+    class qdrant,raw,parsed,images storage
+    class vastai,tavily remote

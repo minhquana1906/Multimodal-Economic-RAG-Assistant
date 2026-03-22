@@ -1,0 +1,50 @@
+stateDiagram-v2
+    [*] --> Idle: Container starts (model NOT loaded)
+
+    state Idle {
+        [*] --> waiting
+        waiting: Waiting for first request
+        note right of waiting: VRAM = 0 GB
+    }
+
+    Idle --> Loading: Request arrives
+
+    state Loading {
+        [*] --> download_check
+        download_check: Check model cached?
+        download_check --> load_weights: cached
+        download_check --> download_model: not cached
+        download_model --> load_weights
+        load_weights: Load to GPU
+        load_weights --> warmup
+        warmup: Warm-up inference
+        note right of load_weights: ASR: ~3.4 GB<br/>TTS: ~2-3 GB<br/>Cold start: 5-8s
+    }
+
+    Loading --> Active: Model ready
+
+    state Active {
+        [*] --> ready
+        ready: Ready for inference
+        ready --> processing: Request
+        processing: GPU inference
+        processing --> ready: Response
+        note right of ready: VRAM allocated<br/>Idle timer running
+    }
+
+    Active --> Active: New request (reset timer)
+    Active --> Unloading: Idle timeout (300s)
+
+    state Unloading {
+        [*] --> delete_model
+        delete_model: del model
+        delete_model --> empty_cache
+        empty_cache: torch.cuda.empty_cache()
+        empty_cache --> gc_collect
+        gc_collect: gc.collect()
+        note right of empty_cache: VRAM freed
+    }
+
+    Unloading --> Idle: VRAM released
+
+    note right of Idle: Other services can<br/>use freed VRAM
