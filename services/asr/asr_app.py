@@ -140,3 +140,88 @@ async def health():
     if on_demand.is_loading:
         return JSONResponse({"status": "loading", "model_loaded": False})
     return JSONResponse({"status": "idle", "model_loaded": False})
+
+
+# ── Audio Decoding ─────────────────────────────────────────────────────
+SUPPORTED_FORMATS = {"audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/flac"}
+
+
+def _decode_audio(audio_bytes: bytes) -> tuple[torch.Tensor, int]:
+    """Decode audio bytes to waveform tensor, resample to 16kHz mono."""
+    buf = io.BytesIO(audio_bytes)
+    waveform, sr = torchaudio.load(buf)
+    # Convert to mono if stereo
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    # Resample to 16kHz if needed
+    if sr != TARGET_SAMPLE_RATE:
+        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=TARGET_SAMPLE_RATE)
+        waveform = resampler(waveform)
+        sr = TARGET_SAMPLE_RATE
+    return waveform, sr
+
+
+# ── Response Models ────────────────────────────────────────────────────
+class TranscribeResponse(BaseModel):
+    text: str
+    language: str
+    duration_seconds: float
+
+
+# ── Transcribe Endpoint ───────────────────────────────────────────────
+@app.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe(
+    file: UploadFile = File(...),
+    language: str = Form("vi"),
+):
+    # Validate content type
+    content_type = file.content_type or "audio/wav"
+    if content_type not in SUPPORTED_FORMATS:
+        return JSONResponse(
+            {"detail": f"Unsupported audio format: {content_type}. Supported: {sorted(SUPPORTED_FORMATS)}"},
+            status_code=415,
+        )
+
+    # Read and decode audio
+    audio_bytes = await file.read()
+    try:
+        waveform, sr = await asyncio.to_thread(_decode_audio, audio_bytes)
+    except Exception as e:
+        logger.error("Audio decode failed: {}", e)
+        return JSONResponse({"detail": f"Failed to decode audio: {e}"}, status_code=400)
+
+    # Check duration
+    duration_s = waveform.shape[-1] / sr
+    if duration_s > MAX_DURATION_S:
+        return JSONResponse(
+            {"detail": f"Audio duration {duration_s:.1f}s exceeds max {MAX_DURATION_S}s"},
+            status_code=413,
+        )
+
+    # Get model (loads on-demand if needed)
+    model = await on_demand.get_model()
+
+    # Transcribe
+    t0 = time.monotonic()
+    # Convert language code to full name for qwen-asr
+    lang_map = {"vi": "Vietnamese", "en": "English", "zh": "Chinese"}
+    lang_name = lang_map.get(language, language)
+
+    try:
+        results = await asyncio.to_thread(
+            model.transcribe,
+            audio=(waveform.squeeze(0).numpy(), sr),
+            language=lang_name,
+        )
+    except Exception as e:
+        logger.error("ASR inference failed: {}", e)
+        return JSONResponse({"detail": f"Transcription failed: {e}"}, status_code=500)
+
+    text = results[0].text if results else ""
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    logger.info("ASR: lang={} duration={:.1f}s latency={}ms text_len={}", language, duration_s, latency_ms, len(text))
+
+    if not text.strip():
+        return JSONResponse({"detail": "Could not transcribe audio — empty result"}, status_code=400)
+
+    return TranscribeResponse(text=text, language=language, duration_seconds=round(duration_s, 2))
