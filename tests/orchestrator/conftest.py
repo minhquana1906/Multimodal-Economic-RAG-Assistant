@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 _root = Path(__file__).parents[2]          # repo root
-_orch_ctx = str(_root / "orchestrator")    # orchestrator/ Docker context dir
+_orch_ctx = str(_root / "api")             # api/ Docker context dir
 
 if _orch_ctx not in sys.path:
     sys.path.insert(0, _orch_ctx)
