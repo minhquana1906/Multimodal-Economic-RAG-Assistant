@@ -2,3 +2,4 @@ fastapi==0.115.12
 uvicorn[standard]==0.34.2
 transformers==4.52.4
 accelerate==1.13.0
+loguru==0.7.3
