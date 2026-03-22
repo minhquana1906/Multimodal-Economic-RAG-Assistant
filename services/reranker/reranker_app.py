@@ -56,7 +56,7 @@ async def health():
 class RerankRequest(BaseModel):
     query: str
     passages: list[str] = Field(..., min_length=1)
-    instruction: str | None = None
+    instruction: str | None = None   # falls back to module-level INSTRUCTION if None
 
 
 class RerankResponse(BaseModel):
