@@ -89,3 +89,24 @@ def test_observability_api_keys_from_env(monkeypatch):
     s = Settings(_env_file=None)
     assert s.observability.tavily_api_key == "tvly-test-key"
     assert s.observability.langsmith_api_key == "ls-test-key"
+
+
+def test_asr_config_defaults():
+    """ServicesConfig has ASR-related fields with correct defaults."""
+    from orchestrator.config import ServicesConfig
+    cfg = ServicesConfig()
+    assert cfg.asr_url == ""
+    assert cfg.asr_timeout == 30.0
+    assert cfg.asr_max_duration_s == 60
+
+
+def test_asr_config_from_env(monkeypatch):
+    """ASR config can be populated from environment variables."""
+    monkeypatch.setenv("SERVICES__ASR_URL", "http://asr:8005")
+    monkeypatch.setenv("SERVICES__ASR_TIMEOUT", "15.0")
+    monkeypatch.setenv("SERVICES__ASR_MAX_DURATION_S", "120")
+    from orchestrator.config import Settings
+    s = Settings()
+    assert s.services.asr_url == "http://asr:8005"
+    assert s.services.asr_timeout == 15.0
+    assert s.services.asr_max_duration_s == 120
