@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from langsmith import traceable
+from loguru import logger
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Prefetch,
@@ -5,10 +9,6 @@ from qdrant_client.models import (
     Fusion,
     SparseVector,
 )
-import logging
-from langsmith import traceable
-
-logger = logging.getLogger(__name__)
 
 # Names must match the collection's vector config
 DENSE_VECTOR_NAME = "dense"
@@ -27,18 +27,9 @@ class RetrieverClient:
         sparse_vector: dict | None = None,
         top_k: int = 20,
     ) -> list[dict]:
-        """Retrieve relevant chunks using dense-only or hybrid RRF search.
-
-        If sparse_vector is provided ({"indices": [...], "values": [...]}),
-        performs hybrid RRF search combining dense + sparse.
-        Otherwise, performs dense-only search.
-
-        Returns list of dicts with keys: id, text, source, title, score.
-        Returns [] on any error.
-        """
+        """Retrieve relevant chunks using dense-only or hybrid RRF search."""
         try:
             if sparse_vector is not None:
-                # Hybrid RRF: dense + sparse via Prefetch + FusionQuery
                 results = await self.client.query_points(
                     collection_name=self.collection,
                     prefetch=[
@@ -62,7 +53,6 @@ class RetrieverClient:
                 )
                 points = results.points
             else:
-                # Dense-only fallback
                 results = await self.client.query_points(
                     collection_name=self.collection,
                     query=dense_vector,
@@ -72,7 +62,7 @@ class RetrieverClient:
                 )
                 points = results.points
 
-            return [
+            docs = [
                 {
                     "id": str(r.id),
                     "text": r.payload.get("text", ""),
@@ -82,6 +72,14 @@ class RetrieverClient:
                 }
                 for r in points
             ]
+            logger.log(
+                "RETRIEVAL",
+                "top_k={} hits={} sparse={}",
+                top_k,
+                len(docs),
+                sparse_vector is not None,
+            )
+            return docs
         except Exception as e:
-            logger.error(f"Retrieval error: {e}")
+            logger.error("Retrieval error: {}", e)
             return []
