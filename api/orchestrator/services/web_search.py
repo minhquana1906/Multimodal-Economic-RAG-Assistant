@@ -1,8 +1,9 @@
-import httpx
-import logging
-from langsmith import traceable
+from __future__ import annotations
 
-logger = logging.getLogger(__name__)
+import httpx
+from langsmith import traceable
+from loguru import logger
+
 
 class WebSearchClient:
     def __init__(self, api_key: str = "", timeout: float = 10.0):
@@ -19,15 +20,23 @@ class WebSearchClient:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     "https://api.tavily.com/search",
-                    json={"api_key": self.api_key, "query": query, "max_results": max_results},
+                    json={
+                        "api_key": self.api_key,
+                        "query": query,
+                        "max_results": max_results,
+                    },
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
                 results = response.json().get("results", [])
                 return [
-                    {"text": r.get("content", ""), "source": r.get("url", ""), "title": r.get("title", "")}
+                    {
+                        "text": r.get("content", ""),
+                        "source": r.get("url", ""),
+                        "title": r.get("title", ""),
+                    }
                     for r in results
                 ]
         except Exception as e:
-            logger.error(f"Web search error: {e}")
+            logger.error("Web search error: {}", e)
             return []

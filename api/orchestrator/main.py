@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import logging
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+from loguru import logger
 
 from orchestrator.config import get_settings
-from orchestrator.tracing import setup_langsmith
+from orchestrator.tracing import setup_logging, setup_langsmith
 from orchestrator.pipeline.rag import build_rag_graph
 from orchestrator.routers.chat import create_chat_router
 from orchestrator.services.guard import GuardClient
@@ -17,25 +17,43 @@ from orchestrator.services.reranker import RerankerClient
 from orchestrator.services.llm import LLMClient
 from orchestrator.services.web_search import WebSearchClient
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
-    setup_langsmith(settings)
+    setup_logging(settings.observability)
+    setup_langsmith(settings.observability)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("Initialising service clients and RAG graph…")
         services = SimpleNamespace(
-            guard=GuardClient(settings.guard_url, settings.guard_timeout),
-            embedder=EmbedderClient(settings.embedding_url, settings.embedding_timeout),
-            retriever=RetrieverClient(settings.qdrant_url, settings.qdrant_collection),
-            reranker=RerankerClient(settings.reranker_url, settings.reranker_timeout),
-            llm=LLMClient(settings.llm_url, timeout=settings.llm_timeout),
-            web_search=WebSearchClient(api_key=settings.tavily_api_key or ""),
+            guard=GuardClient(
+                settings.services.guard_url,
+                settings.services.guard_timeout,
+            ),
+            embedder=EmbedderClient(
+                settings.services.embedding_url,
+                settings.services.embedding_timeout,
+            ),
+            retriever=RetrieverClient(
+                settings.services.qdrant_url,
+                settings.services.qdrant_collection,
+            ),
+            reranker=RerankerClient(
+                settings.services.reranker_url,
+                settings.services.reranker_timeout,
+            ),
+            llm=LLMClient(
+                url=settings.llm.url,
+                model=settings.llm.model,
+                temperature=settings.llm.temperature,
+                max_tokens=settings.llm.max_tokens,
+                timeout=settings.llm.timeout,
+            ),
+            web_search=WebSearchClient(
+                api_key=settings.observability.tavily_api_key or "",
+            ),
         )
         rag_graph = build_rag_graph(services, settings)
         app.include_router(create_chat_router(rag_graph))
@@ -52,11 +70,11 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "model": "Qwen/Qwen3.5-4B"}
+        return {"status": "ok", "model": settings.llm.model}
 
     @app.get("/v1/models")
     async def models():
-        return {"data": [{"id": "multimodal-rag", "object": "model"}]}
+        return {"data": [{"id": "multimodal-economic-rag", "object": "model"}]}
 
     return app
 
