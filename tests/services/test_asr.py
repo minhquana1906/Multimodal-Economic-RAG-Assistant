@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import io
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -260,3 +261,20 @@ async def test_on_demand_model_loading_lock():
     assert load_count == 1
     # All results should be the same model
     assert all(r is original_model for r in results)
+
+
+def test_load_model_uses_standard_runtime_kwargs():
+    import asr_app
+
+    importlib.reload(asr_app)
+    model_cls = MagicMock()
+
+    with patch.dict("sys.modules", {"qwen_asr": SimpleNamespace(Qwen3ASRModel=model_cls)}):
+        asr_app.OnDemandModel()._load_model()
+
+    model_cls.from_pretrained.assert_called_once_with(
+        asr_app.MODEL_NAME,
+        dtype=torch.bfloat16,
+        device_map="cuda:0",
+        max_new_tokens=256,
+    )

@@ -13,11 +13,16 @@ def mock_reranker():
     imports, and the patches are already in place at that point, so the
     reloaded module picks up the mocks rather than the real classes.
     """
-    with patch("reranker_app.AutoModelForCausalLM") as mock_model_cls, \
-         patch("reranker_app.AutoTokenizer") as mock_tok_cls:
+    with (
+        patch("reranker_app.AutoModelForCausalLM") as mock_model_cls,
+        patch("reranker_app.AutoTokenizer") as mock_tok_cls,
+    ):
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
-        mock_tokenizer.convert_tokens_to_ids.side_effect = lambda t: {"yes": 9891, "no": 2822}[t]
+        mock_tokenizer.convert_tokens_to_ids.side_effect = lambda t: {
+            "yes": 9891,
+            "no": 2822,
+        }[t]
         mock_model_cls.from_pretrained.return_value = mock_model
         mock_tok_cls.from_pretrained.return_value = mock_tokenizer
         yield mock_model, mock_tokenizer
@@ -27,6 +32,7 @@ def mock_reranker():
 async def client(mock_reranker):
     import importlib
     import reranker_app
+
     importlib.reload(reranker_app)
     mock_model, mock_tokenizer = mock_reranker
     reranker_app.model = mock_model
@@ -46,6 +52,7 @@ async def test_health_returns_200(client):
 
 async def test_health_returns_503_when_loading(client):
     import reranker_app
+
     reranker_app.model = None
     response = await client.get("/health")
     assert response.status_code == 503
@@ -56,9 +63,13 @@ async def test_rerank_returns_scores(client, mock_reranker):
     mock_model, mock_tokenizer = mock_reranker
     # Mock tokenizer to return tensor-like dict
     mock_inputs = {"input_ids": torch.tensor([[1, 2, 3]])}
-    mock_tokenizer.__call__ = MagicMock(return_value=MagicMock(**{
-        "to.return_value": mock_inputs,
-    }))
+    mock_tokenizer.__call__ = MagicMock(
+        return_value=MagicMock(
+            **{
+                "to.return_value": mock_inputs,
+            }
+        )
+    )
 
     # Mock model output: logits where yes > no → score > 0.5
     mock_logits = torch.zeros(1, 3, 50000)
@@ -69,10 +80,13 @@ async def test_rerank_returns_scores(client, mock_reranker):
     mock_model.return_value = mock_output
     mock_model.device = torch.device("cpu")
 
-    response = await client.post("/rerank", json={
-        "query": "GDP Việt Nam",
-        "passages": ["GDP tăng 7%"],
-    })
+    response = await client.post(
+        "/rerank",
+        json={
+            "query": "GDP Việt Nam",
+            "passages": ["GDP tăng 7%"],
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data["scores"]) == 1
@@ -80,16 +94,20 @@ async def test_rerank_returns_scores(client, mock_reranker):
 
 
 async def test_rerank_empty_passages(client, mock_reranker):
-    response = await client.post("/rerank", json={
-        "query": "GDP",
-        "passages": [],
-    })
+    response = await client.post(
+        "/rerank",
+        json={
+            "query": "GDP",
+            "passages": [],
+        },
+    )
     assert response.status_code == 422
 
 
 def test_format_pair_contains_prefix_and_suffix():
     from reranker_app import format_pair, PREFIX, SUFFIX, INSTRUCTION
-    result = format_pair("test query", "test document")
+
+    result = format_pair("test query", "test document", INSTRUCTION)
     assert result.startswith(PREFIX)
     assert result.endswith(SUFFIX)
     assert "<Instruct>:" in result
@@ -99,6 +117,31 @@ def test_format_pair_contains_prefix_and_suffix():
 
 
 def test_format_pair_contains_thinking_suppression():
-    from reranker_app import format_pair
-    result = format_pair("q", "d")
+    from reranker_app import format_pair, INSTRUCTION
+
+    result = format_pair("q", "d", INSTRUCTION)
     assert "<think>\n\n</think>\n\n" in result
+
+
+async def test_lifespan_loads_reranker_with_standard_runtime_settings(mock_reranker):
+    import importlib
+    import reranker_app
+
+    importlib.reload(reranker_app)
+    mock_model, mock_tokenizer = mock_reranker
+
+    async with reranker_app.lifespan(reranker_app.app):
+        assert reranker_app.model is mock_model
+        assert reranker_app.tokenizer is mock_tokenizer
+
+    mock_tokenizer.convert_tokens_to_ids.assert_any_call("yes")
+    mock_tokenizer.convert_tokens_to_ids.assert_any_call("no")
+    mock_tokenizer.from_pretrained.assert_called_once_with(
+        reranker_app.MODEL_NAME,
+        padding_side="left",
+    )
+    mock_model.from_pretrained.assert_called_once_with(
+        reranker_app.MODEL_NAME,
+        torch_dtype="auto",
+        device_map="auto",
+    )

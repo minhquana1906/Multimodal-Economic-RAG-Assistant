@@ -39,12 +39,12 @@ def chunk_article(article: dict) -> list[dict]:
     - title_lead: title + first paragraph (min 50 chars for that paragraph)
     - body_paragraph: remaining paragraphs, merged when < 50 chars
     """
-    title = article.get("title", "").strip()
-    content = article.get("content", "").strip()
-    url = article.get("url", "")
-    published_date = article.get("published_date", "")
-    category = article.get("category", "")
-    source = article.get("source", "")
+    title = (article.get("title") or "").strip()
+    content = (article.get("content") or "").strip()
+    url = article.get("url") or ""
+    published_date = article.get("published_date") or ""
+    category = article.get("category") or ""
+    source = article.get("source") or ""
 
     if not title or not content:
         return []
@@ -59,30 +59,34 @@ def chunk_article(article: dict) -> list[dict]:
     first_para = raw_paragraphs[0]
     title_lead_text = f"{title}\n\n{first_para}"
     if len(title_lead_text) >= 50:
-        chunks.append({
-            "chunk_type": "title_lead",
-            "chunk_index": 0,
-            "text": title_lead_text,
-            "title": title,
-            "url": url,
-            "published_date": published_date,
-            "category": category,
-            "source": source,
-        })
+        chunks.append(
+            {
+                "chunk_type": "title_lead",
+                "chunk_index": 0,
+                "text": title_lead_text,
+                "title": title,
+                "url": url,
+                "published_date": published_date,
+                "category": category,
+                "source": source,
+            }
+        )
 
     # --- body_paragraph chunks ---
     remaining = raw_paragraphs[1:]
     merged = _merge_short_paragraphs(remaining, min_len=50)
     for i, para in enumerate(merged, start=1):
-        chunks.append({
-            "chunk_type": "body_paragraph",
-            "chunk_index": i,
-            "text": para,
-            "title": title,
-            "url": url,
-            "published_date": published_date,
-            "category": category,
-            "source": source,
-        })
+        chunks.append(
+            {
+                "chunk_type": "body_paragraph",
+                "chunk_index": i,
+                "text": para,
+                "title": title,
+                "url": url,
+                "published_date": published_date,
+                "category": category,
+                "source": source,
+            }
+        )
 
     return chunks

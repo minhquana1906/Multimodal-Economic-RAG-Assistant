@@ -21,8 +21,8 @@ token_false_id: int | None = None
 
 # Chat template wrapping — required for correct logits
 PREFIX = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
-SUFFIX = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
-INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"  # Used in /rerank endpoint (Task 4)
+SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
 
 
 @asynccontextmanager
@@ -32,12 +32,15 @@ async def lifespan(app: FastAPI):
         AutoTokenizer.from_pretrained, MODEL_NAME, padding_side="left"
     )
     model = await asyncio.to_thread(
-        AutoModelForCausalLM.from_pretrained, MODEL_NAME,
-        torch_dtype=torch.float16, device_map="auto"
+        AutoModelForCausalLM.from_pretrained,
+        MODEL_NAME,
+        torch_dtype="auto",
+        device_map="auto",
     )
     model.eval()
     token_true_id = tokenizer.convert_tokens_to_ids("yes")
     token_false_id = tokenizer.convert_tokens_to_ids("no")
+    logger.info("Reranker model loaded: {} | padding_side=left", MODEL_NAME)
     yield
     model = None
     tokenizer = None
@@ -56,7 +59,7 @@ async def health():
 class RerankRequest(BaseModel):
     query: str
     passages: list[str] = Field(..., min_length=1)
-    instruction: str | None = None   # falls back to module-level INSTRUCTION if None
+    instruction: str | None = None  # falls back to module-level INSTRUCTION if None
 
 
 class RerankResponse(BaseModel):
@@ -77,7 +80,9 @@ async def rerank(request: RerankRequest):
 
     def _score_passage(passage: str) -> float:
         formatted = format_pair(request.query, passage, effective_instruction)
-        inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(model.device)
+        inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(
+            model.device
+        )
         with torch.no_grad():
             logits = model(**inputs).logits[:, -1, :]
             true_score = logits[:, token_true_id].exp().item()

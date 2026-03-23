@@ -6,7 +6,7 @@
 def test_format_pair():
     from reranker_app import format_pair, PREFIX, SUFFIX, INSTRUCTION
 
-    result = format_pair("test query", "test doc")
+    result = format_pair("test query", "test doc", INSTRUCTION)
     assert result.startswith(PREFIX)
     assert result.endswith(SUFFIX)
     assert "<Query>: test query" in result
