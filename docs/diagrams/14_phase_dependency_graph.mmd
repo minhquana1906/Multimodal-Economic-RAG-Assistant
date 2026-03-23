@@ -1,0 +1,46 @@
+flowchart TB
+    subgraph Phase1["Phase 1 ✅ COMPLETE"]
+        p1["Text-only RAG<br/>Orchestrator + Embed + Rerank + Guard<br/>+ HF Data Ingest + LangGraph Pipeline"]
+    end
+
+    p1 --> p2a & p2b & p2c
+
+    subgraph Phase2["Phase 2 (Parallel)"]
+        p2a["Phase 2A: ASR Service<br/>Qwen3-ASR-1.7B<br/>8-10h | INDEPENDENT"]
+        p2b["Phase 2B: TTS Service<br/>VieNeu-1000h<br/>8-10h | INDEPENDENT"]
+        p2c["Phase 2C: Data Crawlers<br/>Web + PDF + Academic<br/>12-15h | INDEPENDENT"]
+    end
+
+    p2a --> p3a
+    p2b --> p3a
+    p2c --> p3b
+
+    subgraph Phase3["Phase 3"]
+        p3a["Phase 3A: Pipeline Integration<br/>Extend LangGraph + Multi-collection<br/>10-12h | Depends: 2A, 2B, 3B"]
+        p3b["Phase 3B: VLM Service<br/>Qwen3-VL-4B + VLM Enricher<br/>10-12h | Depends: 2C"]
+    end
+
+    p3b --> p3a
+    p3b --> p4
+
+    subgraph Phase4["Phase 4"]
+        p4["Phase 4: Data Pipeline Integration<br/>Extended Chunker + Pipeline Orchestrator<br/>+ Multi-Collection Qdrant<br/>10-12h | Depends: 2C, 3B"]
+    end
+
+    p3a --> p5
+    p4 --> p5
+
+    subgraph Phase5["Phase 5"]
+        p5["Phase 5: E2E Testing & Polish<br/>Voice E2E + Image E2E + VRAM Profiling<br/>+ Docker Profiles<br/>5-8h | Depends: ALL"]
+    end
+
+    %% Styling
+    classDef done fill:#2ecc71,color:#fff
+    classDef independent fill:#3498db,color:#fff
+    classDef dependent fill:#f39c12,color:#333
+    classDef final fill:#9b59b6,color:#fff
+
+    class p1 done
+    class p2a,p2b,p2c independent
+    class p3a,p3b,p4 dependent
+    class p5 final

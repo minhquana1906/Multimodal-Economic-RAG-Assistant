@@ -2,12 +2,13 @@ import importlib
 
 import numpy as np
 import pytest
+import torch
 from httpx import ASGITransport, AsyncClient
 from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
-def mock_model():
+def mock_sentence_transformer():
     """Mock SentenceTransformer to avoid loading real model in tests.
 
     We patch at the source (sentence_transformers.SentenceTransformer) so that
@@ -17,13 +18,15 @@ def mock_model():
     with patch("sentence_transformers.SentenceTransformer") as mock_cls:
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance
-        yield mock_instance
+        yield mock_cls, mock_instance
 
 
 @pytest.fixture
-async def client(mock_model):
+async def client(mock_sentence_transformer):
     import embedding_app
+
     importlib.reload(embedding_app)
+    _, mock_model = mock_sentence_transformer
     # Simulate startup: set the global model as the mock instance so that
     # /health returns "ok" (ASGITransport does not trigger ASGI lifespan events).
     embedding_app.model = mock_model
@@ -39,8 +42,9 @@ async def test_health_returns_200(client):
     assert data["status"] == "ok"
 
 
-async def test_health_returns_503_when_loading(mock_model):
+async def test_health_returns_503_when_loading(mock_sentence_transformer):
     import embedding_app
+
     importlib.reload(embedding_app)
     # Leave embedding_app.model as None to simulate the loading/startup state.
     embedding_app.model = None
@@ -52,12 +56,16 @@ async def test_health_returns_503_when_loading(mock_model):
     assert data["status"] == "loading"
 
 
-async def test_embed_documents(client, mock_model):
+async def test_embed_documents(client, mock_sentence_transformer):
+    _, mock_model = mock_sentence_transformer
     mock_model.encode.return_value = np.array([[0.1] * 1024, [0.2] * 1024])
-    response = await client.post("/embed", json={
-        "texts": ["Kinh tế Việt Nam", "Lạm phát tăng"],
-        "is_query": False,
-    })
+    response = await client.post(
+        "/embed",
+        json={
+            "texts": ["Kinh tế Việt Nam", "Lạm phát tăng"],
+            "is_query": False,
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data["embeddings"]) == 2
@@ -65,15 +73,22 @@ async def test_embed_documents(client, mock_model):
     mock_model.encode.assert_called_once()
     # Document encoding: no prompt_name
     call_kwargs = mock_model.encode.call_args
-    assert "prompt_name" not in call_kwargs.kwargs or call_kwargs.kwargs.get("prompt_name") is None
+    assert (
+        "prompt_name" not in call_kwargs.kwargs
+        or call_kwargs.kwargs.get("prompt_name") is None
+    )
 
 
-async def test_embed_queries(client, mock_model):
+async def test_embed_queries(client, mock_sentence_transformer):
+    _, mock_model = mock_sentence_transformer
     mock_model.encode.return_value = np.array([[0.5] * 1024])
-    response = await client.post("/embed", json={
-        "texts": ["GDP Việt Nam 2024"],
-        "is_query": True,
-    })
+    response = await client.post(
+        "/embed",
+        json={
+            "texts": ["GDP Việt Nam 2024"],
+            "is_query": True,
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data["embeddings"]) == 1
@@ -82,9 +97,26 @@ async def test_embed_queries(client, mock_model):
     assert call_kwargs.kwargs.get("prompt_name") == "query"
 
 
-async def test_embed_empty_texts(client, mock_model):
-    response = await client.post("/embed", json={
-        "texts": [],
-        "is_query": False,
-    })
+async def test_embed_empty_texts(client, mock_sentence_transformer):
+    response = await client.post(
+        "/embed",
+        json={
+            "texts": [],
+            "is_query": False,
+        },
+    )
     assert response.status_code == 422
+
+
+async def test_lifespan_loads_sentence_transformer_with_default_runtime_settings(
+    mock_sentence_transformer,
+):
+    import embedding_app
+
+    importlib.reload(embedding_app)
+    mock_cls, mock_model = mock_sentence_transformer
+
+    async with embedding_app.lifespan(embedding_app.app):
+        assert embedding_app.model is mock_model
+
+    mock_cls.assert_called_once_with(embedding_app.MODEL_NAME)
