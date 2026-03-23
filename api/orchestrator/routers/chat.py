@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from orchestrator.models.schemas import (
-    ChatRequest,
-    ChatResponse,
     ChatChoice,
     ChatDelta,
+    ChatRequest,
+    ChatResponse,
     ChatStreamChunk,
 )
 from orchestrator.pipeline.rag import RAGState
+
+_AUXILIARY_TASK_MARKERS = (
+    "generate a concise, 3-5 word title",
+    "generate a concise 3-5 word title",
+    "generate 1-3 broad tags categorizing the main themes",
+    "suggest 3-5 relevant follow-up questions",
+)
 
 
 def _build_initial_state(query: str) -> RAGState:
@@ -32,13 +40,28 @@ def _build_initial_state(query: str) -> RAGState:
     }
 
 
-def create_chat_router(rag_graph) -> APIRouter:
+def _is_auxiliary_task_prompt(prompt: str) -> bool:
+    normalized = " ".join(prompt.lower().split())
+    return normalized.startswith("### task:") and any(
+        marker in normalized for marker in _AUXILIARY_TASK_MARKERS
+    )
+
+
+async def _run_request(rag_graph: Any, task_llm: Any | None, user_message: str) -> dict:
+    if task_llm is not None and _is_auxiliary_task_prompt(user_message):
+        return {
+            "answer": await task_llm.complete_prompt(user_message),
+            "citations": [],
+        }
+    return await rag_graph.ainvoke(_build_initial_state(user_message))
+
+
+def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
     """Return a fresh APIRouter with /v1/chat/completions bound to the given RAG graph."""
-    router = APIRouter()   # ← fresh per call, not a module-level singleton
+    router = APIRouter()
 
     @router.post("/v1/chat/completions")
     async def chat_completions(request: ChatRequest):
-        # Extract the last user message
         user_message = next(
             (msg.content for msg in reversed(request.messages) if msg.role == "user"),
             None,
@@ -48,7 +71,7 @@ def create_chat_router(rag_graph) -> APIRouter:
 
         request_id = str(uuid.uuid4())[:8]
         with logger.contextualize(request_id=request_id):
-            result = await rag_graph.ainvoke(_build_initial_state(user_message))
+            result = await _run_request(rag_graph, task_llm, user_message)
 
             answer: str = result.get("answer", "")
             citations: list[dict] = result.get("citations", [])
@@ -56,33 +79,44 @@ def create_chat_router(rag_graph) -> APIRouter:
             if not request.stream:
                 return ChatResponse(
                     model=request.model,
-                    choices=[ChatChoice(delta=ChatDelta(role="assistant", content=answer))],
+                    choices=[
+                        ChatChoice(delta=ChatDelta(role="assistant", content=answer))
+                    ],
                 )
 
-            # SSE streaming: answer word-by-word, then citations block, then [DONE]
             async def generate():
                 words = answer.split()
-                # First chunk: include role
                 if words:
                     first_chunk = ChatStreamChunk(
                         model=request.model,
-                        choices=[ChatChoice(delta=ChatDelta(role="assistant", content=words[0] + (" " if len(words) > 1 else "")), finish_reason=None)],
+                        choices=[
+                            ChatChoice(
+                                delta=ChatDelta(
+                                    role="assistant",
+                                    content=words[0] + (" " if len(words) > 1 else ""),
+                                ),
+                                finish_reason=None,
+                            )
+                        ],
                     )
                     yield f"data: {first_chunk.model_dump_json(exclude_none=True)}\n\n"
 
-                    # Subsequent word chunks: no role
                     for i, word in enumerate(words[1:], start=1):
                         is_last = (i == len(words) - 1) and not citations
                         chunk = ChatStreamChunk(
                             model=request.model,
-                            choices=[ChatChoice(
-                                delta=ChatDelta(content=word + (" " if i < len(words) - 1 else "")),
-                                finish_reason="stop" if is_last else None,
-                            )],
+                            choices=[
+                                ChatChoice(
+                                    delta=ChatDelta(
+                                        content=word
+                                        + (" " if i < len(words) - 1 else "")
+                                    ),
+                                    finish_reason="stop" if is_last else None,
+                                )
+                            ],
                         )
                         yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
                 else:
-                    # Empty answer — emit a stop chunk immediately
                     stop_chunk = ChatStreamChunk(
                         model=request.model,
                         choices=[ChatChoice(delta=ChatDelta(), finish_reason="stop")],
@@ -91,15 +125,19 @@ def create_chat_router(rag_graph) -> APIRouter:
 
                 if citations:
                     citations_text = "\n".join(
-                        f"- {c.get('title', '')} ({c.get('source', '')})"
+                        f"- [{c.get('title', '')}]({c.get('url', '')}) - {c.get('source', '')} (score: {c.get('score', 0):.4f})"
                         for c in citations
                     )
                     cite_chunk = ChatStreamChunk(
                         model=request.model,
-                        choices=[ChatChoice(
-                            delta=ChatDelta(content=f"\n\n**Nguồn:**\n{citations_text}"),
-                            finish_reason="stop",
-                        )],
+                        choices=[
+                            ChatChoice(
+                                delta=ChatDelta(
+                                    content=f"\n\n**Nguồn:**\n{citations_text}"
+                                ),
+                                finish_reason="stop",
+                            )
+                        ],
                     )
                     yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
 
