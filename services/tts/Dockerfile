@@ -13,7 +13,7 @@ RUN pip install --break-system-packages --no-cache-dir \
     torch==2.10.0+cu128 --index-url https://download.pytorch.org/whl/cu128 \
     && pip install --break-system-packages --no-cache-dir -r requirements.txt
 
-COPY tts_app.py text_preprocessor.py abbreviations.py .
+COPY tts_app.py text_preprocessor.py abbreviations.py ./
 
 EXPOSE 8006
 
