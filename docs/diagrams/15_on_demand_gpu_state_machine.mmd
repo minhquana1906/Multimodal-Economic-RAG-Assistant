@@ -1,50 +1,65 @@
 stateDiagram-v2
-    [*] --> Idle: Container starts (model NOT loaded)
+    [*] --> Idle: container start
 
     state Idle {
         [*] --> waiting
-        waiting: Waiting for first request
-        note right of waiting: VRAM = 0 GB
+        waiting: model not loaded
     }
 
-    Idle --> Loading: Request arrives
+    note right of Idle
+        VRAM = 0 GB
+        Waiting for first request
+    end note
+
+    Idle --> Loading: request arrives
 
     state Loading {
-        [*] --> download_check
-        download_check: Check model cached?
-        download_check --> load_weights: cached
-        download_check --> download_model: not cached
-        download_model --> load_weights
-        load_weights: Load to GPU
-        load_weights --> warmup
-        warmup: Warm-up inference
-        note right of load_weights: ASR: ~3.4 GB<br/>TTS: ~2-3 GB<br/>Cold start: 5-8s
+        [*] --> cache_check
+        cache_check: model cached?
+        cache_check --> load_gpu: yes
+        cache_check --> download_model: no
+        download_model --> load_gpu
+        load_gpu: load model to GPU
+        load_gpu --> warmup
+        warmup: warm-up inference
     }
 
-    Loading --> Active: Model ready
+    note right of Loading
+        ASR ~3.4 GB
+        TTS ~2-3 GB
+        Cold start ~5-8 s
+    end note
+
+    Loading --> Active: model ready
 
     state Active {
         [*] --> ready
-        ready: Ready for inference
-        ready --> processing: Request
-        processing: GPU inference
-        processing --> ready: Response
-        note right of ready: VRAM allocated<br/>Idle timer running
+        ready: ready for inference
+        ready --> infer: request
+        infer: run inference
+        infer --> ready: response
     }
 
-    Active --> Active: New request (reset timer)
-    Active --> Unloading: Idle timeout (300s)
+    note right of Active
+        VRAM allocated
+        Idle timer running
+    end note
+
+    Active --> Active: new request / reset timer
+    Active --> Unloading: idle timeout
 
     state Unloading {
-        [*] --> delete_model
-        delete_model: del model
-        delete_model --> empty_cache
-        empty_cache: torch.cuda.empty_cache()
-        empty_cache --> gc_collect
-        gc_collect: gc.collect()
-        note right of empty_cache: VRAM freed
+        [*] --> drop_model
+        drop_model: del model
+        drop_model --> clear_cache
+        clear_cache: torch.cuda.empty_cache()
+        clear_cache --> collect_gc
+        collect_gc: gc.collect()
     }
 
-    Unloading --> Idle: VRAM released
+    note right of Unloading
+        VRAM released
+        Other services can reuse memory
+    end note
 
-    note right of Idle: Other services can<br/>use freed VRAM
+    Unloading --> Idle: back to idle

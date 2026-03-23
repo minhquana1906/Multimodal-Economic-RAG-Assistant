@@ -1,103 +1,43 @@
-stateDiagram-v2
-    [*] --> normalize_input: START
+flowchart TD
+    start([Start]) --> detect{"Input modality?"}
 
-    state normalize_input {
-        [*] --> detect_modality
-        detect_modality --> route_modality
-    }
+    detect -->|Audio| asr["ASR<br/>audio -> text"]
+    detect -->|Image| vlm["VLM<br/>image -> text"]
+    detect -->|Text| input_guard["Input guard"]
 
-    normalize_input --> asr_node: audio
-    normalize_input --> vlm_query_node: image
-    normalize_input --> input_guard: text
+    asr --> input_guard
+    vlm --> input_guard
 
-    state asr_node {
-        [*] --> transcribe_audio
-        transcribe_audio --> set_query_text
-    }
+    input_guard -->|Unsafe| stop1([Stop: apology])
+    input_guard -->|Safe| embed["Embed query"]
 
-    state vlm_query_node {
-        [*] --> analyze_image
-        analyze_image --> set_query_text2: description
-    }
+    embed -->|Error| stop2([Stop: embed error])
+    embed --> retrieve["Search both collections"]
 
-    asr_node --> input_guard: query = transcribed text
-    vlm_query_node --> input_guard: query = VLM description
+    retrieve --> rerank["Rerank top passages"]
+    rerank --> fallback{"Need web fallback?"}
 
-    state input_guard {
-        [*] --> classify_input
-        classify_input --> safe_check
-    }
+    fallback -->|Yes| web["Tavily web search"]
+    fallback -->|No| combine["Combine context"]
+    web --> combine
 
-    input_guard --> embed: safe
-    input_guard --> [*]: unsafe → apology
+    combine --> generate["Generate answer"]
+    generate --> output_guard["Output guard"]
 
-    state embed {
-        [*] --> embed_query
-        embed_query --> dense_vector_1024d
-    }
+    output_guard -->|Blocked| stop3([Stop: safe response])
+    output_guard -->|Safe| citations["Build citations"]
 
-    embed --> retrieve: embeddings
-    embed --> [*]: error
+    citations --> format{"Response format?"}
+    format -->|Text| end1([End: text])
+    format -->|Audio| tts["TTS synthesize"]
+    tts --> end2([End: text + audio])
 
-    state retrieve {
-        [*] --> search_econ_vn_news
-        [*] --> search_econ_knowledge
-        search_econ_vn_news --> merge_results
-        search_econ_knowledge --> merge_results
-    }
+    classDef step fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef transform fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef decision fill:#fef3c7,stroke:#d97706,color:#7c2d12
+    classDef final fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
 
-    retrieve --> rerank
-
-    state rerank {
-        [*] --> score_passages
-        score_passages --> select_top_n
-    }
-
-    rerank --> web_fallback
-
-    state web_fallback {
-        [*] --> evaluate_quality
-        evaluate_quality --> tavily_search: low quality
-        evaluate_quality --> skip: sufficient quality
-    }
-
-    web_fallback --> combine_context
-
-    state combine_context {
-        [*] --> merge_qdrant_web
-        merge_qdrant_web --> limit_context
-    }
-
-    combine_context --> generate
-
-    state generate {
-        [*] --> build_prompt
-        build_prompt --> llm_inference
-        llm_inference --> answer_text
-    }
-
-    generate --> output_guard
-
-    state output_guard {
-        [*] --> classify_output
-        classify_output --> output_safe_check
-    }
-
-    output_guard --> citations: safe
-    output_guard --> [*]: unsafe → error message
-
-    state citations {
-        [*] --> extract_sources
-        extract_sources --> format_citations
-    }
-
-    citations --> format_output
-
-    state format_output {
-        [*] --> check_response_format
-        check_response_format --> tts_synthesize: audio requested
-        check_response_format --> text_only: text only
-        tts_synthesize --> combine_text_audio
-    }
-
-    format_output --> [*]: END (text + optional audio)
+    class input_guard,embed,retrieve,rerank,combine,generate,output_guard,citations step
+    class asr,vlm,web,tts transform
+    class detect,fallback,format decision
+    class start,stop1,stop2,stop3,end1,end2 final
