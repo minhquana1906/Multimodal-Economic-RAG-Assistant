@@ -26,6 +26,7 @@ qdrant_storage/
 **/model_weights/
 services/*/models/
 .cache/
+.cache/huggingface/
 
 .claude/
 CLAUDE.md

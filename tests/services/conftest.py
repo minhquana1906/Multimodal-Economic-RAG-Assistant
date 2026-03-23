@@ -16,12 +16,15 @@ from pathlib import Path
 
 _root = Path(__file__).parents[2]
 
-for _service in ("embedding", "reranker", "guard"):
+for _service in ("embedding", "reranker", "guard", "asr", "tts"):
     _svc_path = str(_root / "services" / _service)
     if _svc_path not in sys.path:
         sys.path.append(_svc_path)
 
 # Evict any already-cached service modules so the next import picks
 # up the correct one from whichever service path is first on sys.path.
-for _mod in ("embedding_app", "reranker_app", "guard_app"):
+for _mod in (
+    "embedding_app", "reranker_app", "guard_app", "asr_app",
+    "tts_app", "text_preprocessor", "abbreviations",
+):
     sys.modules.pop(_mod, None)

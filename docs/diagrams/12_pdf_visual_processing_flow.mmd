@@ -1,0 +1,55 @@
+flowchart TB
+    subgraph PDF["PDF Document"]
+        pdf_file["📄 PDF File<br/>(Financial Report)"]
+    end
+
+    pdf_file --> layout["Step 1: Layout Analysis<br/>(pdfplumber + PyMuPDF)"]
+
+    layout --> text_blocks["Text Blocks"]
+    layout --> visual_regions["Visual Regions"]
+
+    text_blocks --> text_extract["Step 2a: Text Extraction<br/>• Section detection (heading fonts)<br/>• Paragraph merging<br/>• Citation stripping"]
+
+    visual_regions --> img_extract["Step 2b: Image Extraction<br/>(PyMuPDF fitz → PNG)"]
+
+    img_extract --> save_img["Save to data/images/<br/>{doc_hash}_{pg}_{i}.png"]
+
+    save_img --> detect{"Has grid<br/>lines?"}
+
+    detect -->|"YES<br/>(table)"| vlm_table["VLM /extract-table<br/><br/>Output:<br/>• Markdown table<br/>• Raw text"]
+
+    detect -->|"NO<br/>(chart/figure)"| vlm_chart["VLM /describe-chart<br/><br/>Output:<br/>• Description<br/>• Trend analysis<br/>• Key insights"]
+
+    text_extract --> chunks_text["Text Chunks:<br/>• title_lead<br/>• section_content"]
+
+    vlm_table --> chunks_table["Table Chunks:<br/>• chunk_type: table_content<br/>• text: markdown table<br/>• image_path: PNG ref"]
+
+    vlm_chart --> chunks_chart["Chart Chunks:<br/>• chunk_type: chart_description<br/>• text: VLM description<br/>• image_path: PNG ref<br/>• structured_data: insights"]
+
+    chunks_text --> qdrant
+    chunks_table --> qdrant
+    chunks_chart --> qdrant
+
+    qdrant[("Qdrant: econ_knowledge<br/><br/>Each chunk stored with:<br/>1. text → dense embedding (searchable)<br/>2. text → sparse BM25 (searchable)<br/>3. image_path → original PNG ref<br/>4. structured_data → insights/markdown")]
+
+    subgraph Retrieval["At Query Time"]
+        query["User Query"] --> search["Hybrid Search<br/>(dense + sparse)"]
+        search --> found{"Chunk has<br/>image_path?"}
+        found -->|"YES"| return_both["Return text description<br/>+ original image"]
+        found -->|"NO"| return_text["Return text only"]
+    end
+
+    qdrant -.-> search
+
+    %% Styling
+    classDef pdf fill:#e74c3c,color:#fff
+    classDef process fill:#3498db,color:#fff
+    classDef vlm fill:#2ecc71,color:#fff
+    classDef chunk fill:#f39c12,color:#333
+    classDef db fill:#9b59b6,color:#fff
+
+    class pdf_file pdf
+    class layout,text_extract,img_extract,save_img,detect process
+    class vlm_table,vlm_chart vlm
+    class chunks_text,chunks_table,chunks_chart chunk
+    class qdrant db

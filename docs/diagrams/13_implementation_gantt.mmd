@@ -1,0 +1,54 @@
+gantt
+    title Multimodal RAG Implementation Roadmap
+    dateFormat  YYYY-MM-DD
+    axisFormat  %b %d
+
+    section Phase 1 (DONE ✅)
+    Text-only RAG MVP              :done, p1, 2026-03-20, 2026-03-22
+
+    section Phase 2A: ASR
+    ASR Service Core               :p2a1, 2026-03-23, 3d
+    ASR Dockerfile                 :p2a2, after p2a1, 1d
+    ASR Client + Docker            :p2a3, after p2a2, 1d
+    ASR Tests                      :p2a4, after p2a3, 1d
+
+    section Phase 2B: TTS
+    Research VieNeu-1000h          :p2b1, 2026-03-23, 2d
+    TTS Service Core               :p2b2, after p2b1, 3d
+    TTS Client + Docker            :p2b3, after p2b2, 1d
+    TTS Tests                      :p2b4, after p2b3, 1d
+
+    section Phase 2C: Data Crawlers
+    Base Framework + Config        :p2c1, 2026-03-23, 2d
+    Web Crawler                    :p2c2, after p2c1, 3d
+    PDF Crawler                    :p2c3, after p2c2, 2d
+    HTML Parser                    :p2c4, after p2c1, 2d
+    PDF Parser + Visual Extractor  :p2c5, after p2c4, 3d
+    Crawler Tests                  :p2c6, after p2c5, 1d
+
+    section Phase 3A: Pipeline Integration
+    Extend RAGState                :p3a1, after p2a4, 1d
+    Multimodal Nodes (ASR+VLM)     :p3a2, after p3a1, 3d
+    Format Output + TTS            :p3a3, after p3a2, 2d
+    Multi-collection Retrieval     :p3a4, after p3a3, 1d
+    Chat Endpoint Updates          :p3a5, after p3a4, 1d
+    Integration Tests              :p3a6, after p3a5, 1d
+
+    section Phase 3B: VLM Service
+    VLM Service Core               :p3b1, after p2c6, 4d
+    VLM Client                     :p3b2, after p3b1, 1d
+    VLM Enricher                   :p3b3, after p3b2, 2d
+    VLM Tests                      :p3b4, after p3b3, 1d
+
+    section Phase 4: Data Integration
+    Extended Chunker               :p4a, after p3b4, 2d
+    Pipeline Orchestrator          :p4b, after p4a, 3d
+    Multi-Collection Manager       :p4c, after p4b, 1d
+    CLI + Docker                   :p4d, after p4c, 1d
+    Data Pipeline Tests            :p4e, after p4d, 1d
+
+    section Phase 5: E2E & Polish
+    E2E Tests (voice, image)       :p5a, after p3a6, 2d
+    VRAM Profiling                 :p5b, after p5a, 1d
+    Docker Profiles + Config       :p5c, after p5b, 1d
+    Documentation                  :p5d, after p5c, 1d

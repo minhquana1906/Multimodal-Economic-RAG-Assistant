@@ -1,0 +1,287 @@
+x-hf-cache-env: &hf-cache-env
+  HF_HOME: /data/huggingface
+  HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
+  TRANSFORMERS_CACHE: /data/huggingface/hub
+
+x-hf-cache-volume: &hf-cache-volume ./.cache/huggingface:/data/huggingface
+
+x-gpu-reservation: &gpu-reservation
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+networks:
+  rag-net:
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+  open-webui:
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    hostname: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - rag-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  embedding:
+    <<: *gpu-reservation
+    build:
+      context: ./services/embedding
+    hostname: embedding
+    ports:
+      - "8001:8001"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      MAX_SEQ_LENGTH: ${SERVICES__MAX_SEQ_LENGTH:-1024}
+      ENCODE_BATCH_SIZE: ${SERVICES__ENCODE_BATCH_SIZE:-128}
+      <<: *hf-cache-env
+    volumes:
+      - *hf-cache-volume
+      - ./services/embedding:/app
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  reranker:
+    <<: *gpu-reservation
+    build:
+      context: ./services/reranker
+    hostname: reranker
+    ports:
+      - "8002:8002"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      RERANKER_MODEL: ${SERVICES__RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
+      <<: *hf-cache-env
+    volumes:
+      - *hf-cache-volume
+      - ./services/reranker:/app
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  guard:
+    <<: *gpu-reservation
+    build:
+      context: ./services/guard
+    hostname: guard
+    ports:
+      - "8003:8003"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      GUARD_MODEL: ${SERVICES__GUARD_MODEL:-Qwen/Qwen3Guard-Gen-0.6B}
+      <<: *hf-cache-env
+    volumes:
+      - *hf-cache-volume
+      - ./services/guard:/app
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  orchestrator:
+    build:
+      context: ./api
+    hostname: orchestrator
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./api:/app
+    networks:
+      - rag-net
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
+      guard:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  webui:
+    image: ghcr.io/open-webui/open-webui:main
+    hostname: webui
+    ports:
+      - "8080:8080"
+    environment:
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      ENABLE_RAG_WEB_SEARCH: "false"
+      ENABLE_IMAGE_GENERATION: "false"
+      WEBUI_AUTH: "true"
+      ENABLE_SIGNUP: "true"
+      ENABLE_LOGIN_FORM: "true"
+      DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
+    volumes:
+      - open-webui:/app/backend/data
+    networks:
+      - rag-net
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    hostname: tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - rag-net
+    depends_on:
+      - webui
+    restart: unless-stopped
+
+  ingest:
+    build:
+      context: ./scripts
+    environment:
+      EMBEDDING_URL: http://embedding:8001
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-econ_vn_news}
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      <<: *hf-cache-env
+    volumes:
+      - *hf-cache-volume
+      - ./scripts:/app
+    networks:
+      - rag-net
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+    profiles:
+      - ingest
+
+  asr:
+    <<: *gpu-reservation
+    build:
+      context: ./services/asr
+    hostname: asr
+    ports:
+      - "8005:8005"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      ASR_MODEL: ${SERVICES__ASR_MODEL:-Qwen/Qwen3-ASR-1.7B}
+      ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S:-60}
+      ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT:-300}
+      <<: *hf-cache-env
+    volumes:
+      - *hf-cache-volume
+      - ./services/asr:/app
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - audio
+
+  tts:
+    <<: *gpu-reservation
+    build:
+      context: ./services/tts
+    hostname: tts
+    ports:
+      - "8006:8006"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      TTS_MODEL: ${SERVICES__TTS_MODEL:-pnnbao-ump/VieNeu-TTS}
+      TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT:-300}
+      TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE:-24000}
+      TTS_SPEED: ${SERVICES__TTS_SPEED:-1.0}
+      <<: *hf-cache-env
+    volumes:
+      - *hf-cache-volume
+      - ./services/tts:/app
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - audio

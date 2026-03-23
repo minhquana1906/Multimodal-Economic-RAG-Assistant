@@ -1,0 +1,43 @@
+flowchart TD
+    start([Start]) --> detect{"Input modality?"}
+
+    detect -->|Audio| asr["ASR<br/>audio -> text"]
+    detect -->|Image| vlm["VLM<br/>image -> text"]
+    detect -->|Text| input_guard["Input guard"]
+
+    asr --> input_guard
+    vlm --> input_guard
+
+    input_guard -->|Unsafe| stop1([Stop: apology])
+    input_guard -->|Safe| embed["Embed query"]
+
+    embed -->|Error| stop2([Stop: embed error])
+    embed --> retrieve["Search both collections"]
+
+    retrieve --> rerank["Rerank top passages"]
+    rerank --> fallback{"Need web fallback?"}
+
+    fallback -->|Yes| web["Tavily web search"]
+    fallback -->|No| combine["Combine context"]
+    web --> combine
+
+    combine --> generate["Generate answer"]
+    generate --> output_guard["Output guard"]
+
+    output_guard -->|Blocked| stop3([Stop: safe response])
+    output_guard -->|Safe| citations["Build citations"]
+
+    citations --> format{"Response format?"}
+    format -->|Text| end1([End: text])
+    format -->|Audio| tts["TTS synthesize"]
+    tts --> end2([End: text + audio])
+
+    classDef step fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef transform fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef decision fill:#fef3c7,stroke:#d97706,color:#7c2d12
+    classDef final fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+
+    class input_guard,embed,retrieve,rerank,combine,generate,output_guard,citations step
+    class asr,vlm,web,tts transform
+    class detect,fallback,format decision
+    class start,stop1,stop2,stop3,end1,end2 final

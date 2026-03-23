@@ -2,6 +2,7 @@
 import asyncio
 import os
 import re
+import sys
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -10,7 +11,10 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from loguru import logger
 
+logger.remove()
+logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
 MODEL_NAME = os.getenv("GUARD_MODEL", "Qwen/Qwen3Guard-Gen-0.6B")
 model = None
@@ -22,10 +26,13 @@ async def lifespan(app: FastAPI):
     global model, tokenizer
     tokenizer = await asyncio.to_thread(AutoTokenizer.from_pretrained, MODEL_NAME)
     model = await asyncio.to_thread(
-        AutoModelForCausalLM.from_pretrained, MODEL_NAME,
-        torch_dtype=torch.float16, device_map="auto"
+        AutoModelForCausalLM.from_pretrained,
+        MODEL_NAME,
+        torch_dtype="auto",
+        device_map="auto",
     )
     model.eval()
+    logger.info("Guard model loaded: {}", MODEL_NAME)
     yield
     model = None
     tokenizer = None
@@ -82,7 +89,7 @@ def _run_classify(text: str, role: str, prompt: str | None) -> str:
     inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
     with torch.no_grad():
         output_ids = model.generate(**inputs, max_new_tokens=128)
-    new_tokens = output_ids[0][inputs["input_ids"].shape[-1]:]
+    new_tokens = output_ids[0][inputs["input_ids"].shape[-1] :]
     output_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
     return parse_safety_label(output_text)
 
@@ -91,5 +98,7 @@ def _run_classify(text: str, role: str, prompt: str | None) -> str:
 async def classify(request: ClassifyRequest):
     if model is None or tokenizer is None:
         return JSONResponse({"detail": "Model is still loading"}, status_code=503)
-    label = await asyncio.to_thread(_run_classify, request.text, request.role, request.prompt)
+    label = await asyncio.to_thread(
+        _run_classify, request.text, request.role, request.prompt
+    )
     return ClassifyResponse(label=label)
