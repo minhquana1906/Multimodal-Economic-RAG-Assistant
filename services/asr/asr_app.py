@@ -69,12 +69,18 @@ class OnDemandModel:
         """Blocking model load — run via asyncio.to_thread."""
         from qwen_asr import Qwen3ASRModel
 
-        return Qwen3ASRModel.from_pretrained(
+        model_kwargs = {
+            "dtype": torch.bfloat16,
+            "device_map": "cuda:0",
+            "max_new_tokens": 256,
+        }
+        model = Qwen3ASRModel.from_pretrained(MODEL_NAME, **model_kwargs)
+        logger.info(
+            "ASR load config: model={} | dtype={}",
             MODEL_NAME,
-            dtype=torch.bfloat16,
-            device_map="cuda:0",
-            max_new_tokens=256,
+            model_kwargs["dtype"],
         )
+        return model
 
     async def unload(self):
         """Unload model and free VRAM."""

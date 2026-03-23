@@ -59,8 +59,10 @@ DATASET_NAME: str = "khoalnd/EconVNNews"
 EMBEDDING_URL: str = os.getenv("EMBEDDING_URL", "http://embedding:8001")
 QDRANT_URL: str = os.getenv("QDRANT_URL", "http://qdrant:6333")
 COLLECTION_NAME: str = "econ_vn_news"
-BATCH_SIZE: int = 256
+BATCH_SIZE: int = int(os.getenv("INGEST_BATCH_SIZE", "256"))
 DENSE_DIM: int = 1024
+MAX_EMBED_RETRIES: int = 3
+EMBED_RETRY_DELAY: float = 5.0
 EXPECTED_MIN: int = 400_000
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ def create_collection(
         },
     )
     logger.info(
-        "Created collection '%s' (dense=%d, sparse=BM25)", collection_name, dense_dim
+        f"Created collection '{collection_name}' (dense={dense_dim}, sparse=BM25)"
     )
 
 
@@ -110,10 +112,7 @@ def should_skip_ingestion(
         count = info.points_count or 0
         if count >= expected_min:
             logger.info(
-                "Collection '%s' already has %d >= %d points; skipping ingestion.",
-                collection_name,
-                count,
-                expected_min,
+                f"Collection '{collection_name}' already has {count} >= {expected_min} points; skipping ingestion."
             )
             return True
     except Exception:
@@ -130,14 +129,22 @@ def should_skip_ingestion(
 async def get_dense_embeddings(
     texts: list[str], is_query: bool = False
 ) -> list[list[float]]:
-    """Fetch dense embeddings from the embedding service (async HTTP)."""
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{EMBEDDING_URL}/embed",
-            json={"texts": texts, "is_query": is_query},
-        )
-        response.raise_for_status()
-        return response.json()["embeddings"]
+    """Fetch dense embeddings from the embedding service with OOM retry."""
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        for attempt in range(1, MAX_EMBED_RETRIES + 1):
+            response = await client.post(
+                f"{EMBEDDING_URL}/embed",
+                json={"texts": texts, "is_query": is_query},
+            )
+            if response.status_code == 500 and attempt < MAX_EMBED_RETRIES:
+                logger.warning(
+                    f"Embedding request failed (attempt {attempt}/{MAX_EMBED_RETRIES}), "
+                    f"retrying in {EMBED_RETRY_DELAY}s..."
+                )
+                await asyncio.sleep(EMBED_RETRY_DELAY)
+                continue
+            response.raise_for_status()
+            return response.json()["embeddings"]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +155,7 @@ async def get_dense_embeddings(
 @traceable(name="Load and Chunk Articles")
 def load_and_chunk_articles() -> list[dict]:
     """Load EconVNNews dataset and chunk all articles."""
-    logger.info("Loading dataset '%s'...", DATASET_NAME)
+    logger.info(f"Loading dataset '{DATASET_NAME}'...")
     dataset = load_dataset(DATASET_NAME, split="train", streaming=False)
 
     all_chunks: list[dict] = []
@@ -156,11 +163,9 @@ def load_and_chunk_articles() -> list[dict]:
         chunks = chunk_article(article)
         all_chunks.extend(chunks)
         if (i + 1) % 10_000 == 0:
-            logger.info(
-                "Chunked %d articles → %d chunks so far", i + 1, len(all_chunks)
-            )
+            logger.info(f"Chunked {i+1} articles → {len(all_chunks)} chunks so far")
 
-    logger.info("Total: %d chunks from %d articles", len(all_chunks), len(dataset))
+    logger.info(f"Total: {len(all_chunks)} chunks from {len(dataset)} articles")
     return all_chunks
 
 
@@ -245,16 +250,11 @@ async def main() -> None:
         batch_num = batch_start // BATCH_SIZE + 1
         if batch_num % 10 == 0 or batch_start + BATCH_SIZE >= total:
             logger.info(
-                "Batch %d: upserted %d / %d chunks",
-                batch_num,
-                points_upserted,
-                total,
+                f"Batch {batch_num}: upserted {points_upserted} / {total} chunks"
             )
 
     logger.info(
-        "Ingestion complete! %d points upserted to '%s'.",
-        points_upserted,
-        COLLECTION_NAME,
+        f"Ingestion complete! {points_upserted} points upserted to '{COLLECTION_NAME}'."
     )
 
 
