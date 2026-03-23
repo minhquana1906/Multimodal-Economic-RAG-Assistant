@@ -1,10 +1,26 @@
 from __future__ import annotations
 
 import time
+from typing import TypedDict
 
 import httpx
 from langsmith import traceable
 from loguru import logger
+
+
+class GuardResult(TypedDict):
+    label: str
+    safe_label: str | None
+    categories: list[str]
+    refusal: str | None
+
+
+_DEFAULT_GUARD_RESULT: GuardResult = {
+    "label": "unsafe",
+    "safe_label": "Unsafe",
+    "categories": [],
+    "refusal": None,
+}
 
 
 class GuardClient:
@@ -12,9 +28,21 @@ class GuardClient:
         self.url = url
         self.timeout = timeout
 
+    def _normalize_result(self, payload: dict) -> GuardResult:
+        label = payload.get("label", "unsafe")
+        safe_label = payload.get("safe_label") or ("Safe" if label == "safe" else "Unsafe")
+        categories = payload.get("categories") or []
+        refusal = payload.get("refusal")
+        return {
+            "label": label,
+            "safe_label": safe_label,
+            "categories": categories,
+            "refusal": refusal,
+        }
+
     @traceable(name="Check Input Safety", run_type="chain")
-    async def check_input(self, text: str) -> bool:
-        """Check if input is safe. Returns True if safe. Fail-closed (returns False on error)."""
+    async def check_input(self, text: str) -> GuardResult:
+        """Check if input is safe. Fail-closed on error."""
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient() as client:
@@ -24,22 +52,24 @@ class GuardClient:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                label = response.json().get("label", "unsafe")
+                result = self._normalize_result(response.json())
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "GUARD",
-                    "role=input label={} latency_ms={}",
-                    label,
+                    "role=input label={} safe_label={} categories={} latency_ms={}",
+                    result["label"],
+                    result["safe_label"],
+                    result["categories"],
                     latency_ms,
                 )
-                return label == "safe"
+                return result
         except Exception as e:
             logger.error("Guard service error: {}", e)
-            return False
+            return dict(_DEFAULT_GUARD_RESULT)
 
     @traceable(name="Check Output Safety", run_type="chain")
-    async def check_output(self, text: str, prompt: str) -> bool:
-        """Check if output is safe. Fail-closed (returns False on error)."""
+    async def check_output(self, text: str, prompt: str) -> GuardResult:
+        """Check if output is safe. Fail-closed on error."""
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient() as client:
@@ -49,15 +79,18 @@ class GuardClient:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                label = response.json().get("label", "unsafe")
+                result = self._normalize_result(response.json())
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "GUARD",
-                    "role=output label={} latency_ms={}",
-                    label,
+                    "role=output label={} safe_label={} categories={} refusal={} latency_ms={}",
+                    result["label"],
+                    result["safe_label"],
+                    result["categories"],
+                    result["refusal"],
                     latency_ms,
                 )
-                return label == "safe"
+                return result
         except Exception as e:
             logger.error("Guard service error: {}", e)
-            return False
+            return dict(_DEFAULT_GUARD_RESULT)

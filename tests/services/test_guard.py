@@ -19,14 +19,13 @@ def _setup_classify_mock(mock_model, mock_tokenizer, decode_output: str):
 def mock_guard():
     """Mock transformers model and tokenizer for guard service.
 
-    Patching at `guard_app.*` works because the `client` fixture calls
-    `importlib.reload(guard_app)` — this re-executes the module's top-level
-    imports, and the patches are already in place at that point, so the
-    reloaded module picks up the mocks rather than the real classes.
+    We patch `transformers.*` because the service module imports those
+    symbols at module load time and `importlib.reload(guard_app)` re-executes
+    that import path.
     """
     with (
-        patch("guard_app.AutoModelForCausalLM") as mock_model_cls,
-        patch("guard_app.AutoTokenizer") as mock_tok_cls,
+        patch("transformers.AutoModelForCausalLM") as mock_model_cls,
+        patch("transformers.AutoTokenizer") as mock_tok_cls,
     ):
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -73,7 +72,11 @@ async def test_classify_returns_503_when_loading(client):
 
 async def test_classify_input_safe(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
-    _setup_classify_mock(mock_model, mock_tokenizer, "Safety: Safe\nSome explanation")
+    _setup_classify_mock(
+        mock_model,
+        mock_tokenizer,
+        "Safety: Safe\nCategory: None\nSome explanation",
+    )
 
     response = await client.post(
         "/classify",
@@ -84,12 +87,17 @@ async def test_classify_input_safe(client, mock_guard):
     )
     assert response.status_code == 200
     assert response.json()["label"] == "safe"
+    assert response.json()["safe_label"] == "Safe"
+    assert response.json()["categories"] == []
+    assert response.json()["refusal"] is None
 
 
 async def test_classify_input_unsafe(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
     _setup_classify_mock(
-        mock_model, mock_tokenizer, "Safety: Unsafe\nThis is harmful content"
+        mock_model,
+        mock_tokenizer,
+        "Safety: Unsafe\nNon-violent Illegal Acts\nThis is harmful content",
     )
 
     response = await client.post(
@@ -101,11 +109,18 @@ async def test_classify_input_unsafe(client, mock_guard):
     )
     assert response.status_code == 200
     assert response.json()["label"] == "unsafe"
+    assert response.json()["safe_label"] == "Unsafe"
+    assert response.json()["categories"] == ["Non-violent Illegal Acts"]
+    assert response.json()["refusal"] is None
 
 
 async def test_classify_output_with_prompt(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
-    _setup_classify_mock(mock_model, mock_tokenizer, "Safety: Safe\nOutput looks fine")
+    _setup_classify_mock(
+        mock_model,
+        mock_tokenizer,
+        "Safety: Safe\nCategory: None\nRefusal: No\nOutput looks fine",
+    )
 
     response = await client.post(
         "/classify",
@@ -117,8 +132,10 @@ async def test_classify_output_with_prompt(client, mock_guard):
     )
     assert response.status_code == 200
     assert response.json()["label"] == "safe"
+    assert response.json()["safe_label"] == "Safe"
+    assert response.json()["categories"] == []
+    assert response.json()["refusal"] == "No"
 
-    # Verify that apply_chat_template was called with messages containing an assistant role
     call_args = mock_tokenizer.apply_chat_template.call_args[0][0]
     assert any(msg["role"] == "assistant" for msg in call_args)
 
@@ -126,7 +143,9 @@ async def test_classify_output_with_prompt(client, mock_guard):
 async def test_classify_controversial_is_unsafe(client, mock_guard):
     mock_model, mock_tokenizer = mock_guard
     _setup_classify_mock(
-        mock_model, mock_tokenizer, "Safety: Controversial\nThis is debatable"
+        mock_model,
+        mock_tokenizer,
+        "Safety: Controversial\nPolitically Sensitive Topics\nThis is debatable",
     )
 
     response = await client.post(
@@ -138,6 +157,8 @@ async def test_classify_controversial_is_unsafe(client, mock_guard):
     )
     assert response.status_code == 200
     assert response.json()["label"] == "unsafe"
+    assert response.json()["safe_label"] == "Controversial"
+    assert response.json()["categories"] == ["Politically Sensitive Topics"]
 
 
 def test_parse_safety_label_safe():
@@ -170,6 +191,18 @@ def test_parse_safety_label_case_insensitive():
     assert parse_safety_label("safety: safe") == "safe"
 
 
+def test_extract_label_categories_refusal_parses_qwen_metadata():
+    from guard_app import extract_label_categories_refusal
+
+    label, categories, refusal = extract_label_categories_refusal(
+        "Safety: Unsafe\nViolent\nCopyright Violation\nRefusal: Yes"
+    )
+
+    assert label == "Unsafe"
+    assert categories == ["Violent", "Copyright Violation"]
+    assert refusal == "Yes"
+
+
 async def test_lifespan_loads_guard_with_standard_runtime_settings(mock_guard):
     import guard_app
 
@@ -180,8 +213,8 @@ async def test_lifespan_loads_guard_with_standard_runtime_settings(mock_guard):
         assert guard_app.model is mock_model
         assert guard_app.tokenizer is mock_tokenizer
 
-    mock_tokenizer.from_pretrained.assert_called_once_with(guard_app.MODEL_NAME)
-    mock_model.from_pretrained.assert_called_once_with(
+    guard_app.AutoTokenizer.from_pretrained.assert_called_once_with(guard_app.MODEL_NAME)
+    guard_app.AutoModelForCausalLM.from_pretrained.assert_called_once_with(
         guard_app.MODEL_NAME,
         torch_dtype="auto",
         device_map="auto",

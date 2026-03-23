@@ -35,6 +35,9 @@ def _build_initial_state(query: str) -> RAGState:
         "final_context": [],
         "answer": "",
         "output_safe": False,
+        "input_guard_result": {},
+        "output_guard_result": {},
+        "generation_prompt": "",
         "citations": [],
         "error": None,
     }
@@ -54,6 +57,15 @@ async def _run_request(rag_graph: Any, task_llm: Any | None, user_message: str) 
             "citations": [],
         }
     return await rag_graph.ainvoke(_build_initial_state(user_message))
+
+
+def _format_citation(citation: dict) -> str:
+    title = citation.get("title", "") or "Nguồn tham khảo"
+    url = citation.get("url", "") or ""
+    source = citation.get("source", "") or url or "unknown"
+    score = float(citation.get("score", 0.0) or 0.0)
+    title_part = f"[{title}]({url})" if url else title
+    return f"- {title_part} - **{source} ({score:.4f})**"
 
 
 def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
@@ -108,8 +120,7 @@ def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
                             choices=[
                                 ChatChoice(
                                     delta=ChatDelta(
-                                        content=word
-                                        + (" " if i < len(words) - 1 else "")
+                                        content=word + (" " if i < len(words) - 1 else "")
                                     ),
                                     finish_reason="stop" if is_last else None,
                                 )
@@ -124,10 +135,7 @@ def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
                     yield f"data: {stop_chunk.model_dump_json(exclude_none=True)}\n\n"
 
                 if citations:
-                    citations_text = "\n".join(
-                        f"- [{c.get('title', '')}]({c.get('url', '')}) - {c.get('source', '')} (score: {c.get('score', 0):.4f})"
-                        for c in citations
-                    )
+                    citations_text = "\n".join(_format_citation(c) for c in citations)
                     cite_chunk = ChatStreamChunk(
                         model=request.model,
                         choices=[

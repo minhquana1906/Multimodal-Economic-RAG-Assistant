@@ -26,3 +26,15 @@ def test_parse_safety_label_unsafe_or_controversial():
     assert parse_safety_label("Safety: Unsafe") == "unsafe"
     assert parse_safety_label("Safety: Controversial") == "unsafe"
     assert parse_safety_label("garbage") == "unsafe"  # Fail-closed
+
+
+def test_extract_label_categories_refusal_filters_none():
+    from guard_app import extract_label_categories_refusal
+
+    label, categories, refusal = extract_label_categories_refusal(
+        "Safety: Safe\nNone\nRefusal: No"
+    )
+
+    assert label == "Safe"
+    assert categories == []
+    assert refusal == "No"

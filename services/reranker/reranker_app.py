@@ -6,9 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from loguru import logger
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
@@ -25,9 +25,12 @@ SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
 
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model, tokenizer, token_true_id, token_false_id
+    if AutoTokenizer is None or AutoModelForCausalLM is None:
+        raise RuntimeError("transformers is required to load the reranker model")
     tokenizer = await asyncio.to_thread(
         AutoTokenizer.from_pretrained, MODEL_NAME, padding_side="left"
     )

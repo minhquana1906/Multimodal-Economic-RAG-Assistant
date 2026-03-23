@@ -31,7 +31,14 @@ async def test_chat_endpoint_non_streaming():
     app, mock_graph, mock_task_llm = _make_app(
         {
             "answer": "GDP tăng 7%",
-            "citations": [{"title": "Báo cáo GDP", "source": "mof.gov.vn"}],
+            "citations": [
+                {
+                    "title": "Báo cáo GDP",
+                    "url": "https://mof.gov.vn/gdp",
+                    "source": "mof.gov.vn",
+                    "score": 0.9123,
+                }
+            ],
         }
     )
 
@@ -110,6 +117,46 @@ async def test_chat_endpoint_streaming():
         for c in data_chunks
     )
     assert has_stop, "No chunk with finish_reason='stop' found"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_streaming_appends_markdown_citations():
+    app, _, _ = _make_app(
+        {
+            "answer": "GDP tăng",
+            "citations": [
+                {
+                    "title": "Báo cáo GDP",
+                    "url": "https://mof.gov.vn/gdp",
+                    "source": "mof.gov.vn",
+                    "score": 0.9123,
+                }
+            ],
+        }
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "multimodal-economic-rag",
+                "messages": [{"role": "user", "content": "GDP?"}],
+                "stream": True,
+            },
+        ) as response:
+            chunks = []
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    chunks.append(line[6:])
+
+    data_chunks = [json.loads(c) for c in chunks if c != "[DONE]"]
+    all_content = "".join(
+        chunk["choices"][0]["delta"].get("content", "") for chunk in data_chunks
+    )
+    assert "[Báo cáo GDP](https://mof.gov.vn/gdp) - **mof.gov.vn (0.9123)**" in all_content
 
 
 @pytest.mark.asyncio
