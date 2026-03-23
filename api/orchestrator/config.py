@@ -7,11 +7,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMConfig(BaseModel):
-    url: str = "http://localhost:8004"
-    model: str = "Qwen/Qwen3.5-4B"
+    url: str = "http://171.231.22.80:28066/v1"
+    model: str = "Qwen/Qwen3-4B-Instruct-2507"
     temperature: float = 0.7
-    max_tokens: int = 512
+    max_tokens: int = 2048
     timeout: float = 60.0
+    api_key: str = ""
 
 
 class ServicesConfig(BaseModel):
@@ -31,12 +32,12 @@ class ServicesConfig(BaseModel):
     qdrant_collection: str = "econ_vn_news"
 
     # ASR Service (on-demand, profile: audio)
-    asr_url: str = ""
+    asr_url: str = "http://asr:8005"
     asr_timeout: float = 30.0
     asr_max_duration_s: int = 60
 
     # TTS Service (on-demand, profile: audio)
-    tts_url: str = ""
+    tts_url: str = "http://tts:8006"
     tts_timeout: float = 30.0
     tts_speed: float = 1.0
 
@@ -52,20 +53,20 @@ class RAGConfig(BaseModel):
 
 class PromptsConfig(BaseModel):
     system_prompt: str = (
-        "Bạn là trợ lý AI chuyên về kinh tế tài chính Việt Nam. "
-        "Hãy trả lời ngắn gọn, chính xác dựa trên thông tin được cung cấp."
+        "Bạn là trợ lý AI chuyên về kinh tế tài chính Việt Nam. Hãy trả lời ngắn gọn, chính xác dựa trên thông tin được cung cấp."
     )
     user_template: str = (
         "Dựa vào các đoạn văn bản sau:\n{context}\n\nTrả lời: {question}"
     )
     reranker_instruction: str = (
-        "Cho một câu hỏi về kinh tế, tài chính, "
-        "đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
+        "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
     )
     no_context_message: str = "Xin lỗi, tôi không tìm thấy thông tin liên quan."
-    guard_error_message: str = "Xin lỗi, yêu cầu của bạn không thể xử lý."
+    guard_error_message: str = (
+        "Xin lỗi, tôi không thể xử lý yêu cầu của bạn do yêu cầu đã vi phạm chính sách của chúng tôi."
+    )
     apology_message: str = (
-        "Xin lỗi, tôi không thể trả lời câu hỏi này theo nội dung của chúng tôi."
+        "Xin lỗi, tôi không thể trả lời câu hỏi này theo tài liệu hiện tại."
     )
 
 
