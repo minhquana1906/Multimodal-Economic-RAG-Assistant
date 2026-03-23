@@ -1,4 +1,0 @@
-ingress:
-  - hostname: quannguyen.works
-    service: http://webui:8080
-  - service: http_status:404

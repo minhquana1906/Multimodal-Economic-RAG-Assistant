@@ -182,9 +182,7 @@ services:
   tunnel:
     image: cloudflare/cloudflared:latest
     hostname: tunnel
-    command: tunnel --config /etc/cloudflared/config.yml --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    volumes:
-      - ./tunnel/config.yml:/etc/cloudflared/config.yml:ro
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
       - rag-net
     depends_on:

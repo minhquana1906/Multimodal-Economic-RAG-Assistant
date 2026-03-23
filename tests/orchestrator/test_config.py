@@ -5,10 +5,10 @@ import pytest
 def test_llm_config_defaults():
     from orchestrator.config import LLMConfig
     cfg = LLMConfig()
-    assert cfg.url == "http://localhost:8004"
-    assert cfg.model == "Qwen/Qwen3.5-4B"
+    assert cfg.url == "http://171.231.22.80:28066/v1"
+    assert cfg.model == "Qwen/Qwen3-4B-Instruct-2507"
     assert cfg.temperature == 0.7
-    assert cfg.max_tokens == 512
+    assert cfg.max_tokens == 2048
     assert cfg.timeout == 60.0
 
 
@@ -59,7 +59,7 @@ def test_observability_config_defaults():
 def test_settings_nested_access():
     from orchestrator.config import Settings
     s = Settings(_env_file=None)
-    assert s.llm.url == "http://localhost:8004"
+    assert s.llm.url == "http://171.231.22.80:28066/v1"
     assert s.services.embedding_url == "http://embedding:8001"
     assert s.rag.retrieval_top_k == 20
     assert s.prompts.no_context_message.startswith("Xin lỗi")
@@ -95,7 +95,7 @@ def test_asr_config_defaults():
     """ServicesConfig has ASR-related fields with correct defaults."""
     from orchestrator.config import ServicesConfig
     cfg = ServicesConfig()
-    assert cfg.asr_url == ""
+    assert cfg.asr_url == "http://asr:8005"
     assert cfg.asr_timeout == 30.0
     assert cfg.asr_max_duration_s == 60
 
