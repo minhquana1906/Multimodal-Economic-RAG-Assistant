@@ -50,13 +50,14 @@ def create_app() -> FastAPI:
                 temperature=settings.llm.temperature,
                 max_tokens=settings.llm.max_tokens,
                 timeout=settings.llm.timeout,
+                api_key=settings.llm.api_key or "",
             ),
             web_search=WebSearchClient(
                 api_key=settings.observability.tavily_api_key or "",
             ),
         )
         rag_graph = build_rag_graph(services, settings)
-        app.include_router(create_chat_router(rag_graph))
+        app.include_router(create_chat_router(rag_graph, services.llm))
         logger.info("RAG graph ready")
         yield
         # graceful shutdown placeholder
