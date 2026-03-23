@@ -1,54 +1,63 @@
-graph TB
-    subgraph Internet["🌐 Internet"]
-        vastai["vast.ai Remote GPU<br/>vLLM: Qwen3.5-4B :8004<br/>VLM: Qwen3-VL-4B :8007"]
-        tavily["Tavily Web Search API"]
+flowchart TB
+    subgraph access["Access Layer"]
+        tunnel["Cloudflare<br/>Tunnel"]
+        webui["Open WebUI<br/>:8080"]
     end
 
-    subgraph Local["🖥️ Local Machine (RTX 3060 12GB)"]
-        subgraph DockerNet["Docker Bridge: rag-net"]
-            subgraph AlwaysOn["Always On (~3.6 GB VRAM)"]
-                emb["Embedding :8001<br/>Qwen3-Embedding-0.6B<br/>1.2 GB"]
-                rrk["Reranker :8002<br/>Qwen3-Reranker-0.6B<br/>1.2 GB"]
-                grd["Guard :8003<br/>Qwen3Guard-Gen-0.6B<br/>1.2 GB"]
+    subgraph local["Local Machine - RTX 3060 (12 GB)"]
+        subgraph net["Docker Network: rag-net"]
+            orch["Orchestrator<br/>FastAPI + LangGraph<br/>:8000"]
+
+            subgraph always_on["Always-on GPU Services (~3.6 GB)"]
+                emb["Embedding<br/>:8001<br/>1.2 GB"]
+                rrk["Reranker<br/>:8002<br/>1.2 GB"]
+                grd["Guard<br/>:8003<br/>1.2 GB"]
             end
 
-            subgraph OnDemand["On-Demand (~5.4-6.4 GB VRAM)"]
-                asr["ASR :8005<br/>Qwen3-ASR-1.7B<br/>3.4 GB"]
-                tts["TTS :8006<br/>VieNeu-1000h<br/>2-3 GB"]
+            subgraph on_demand["On-demand GPU Services"]
+                asr["ASR<br/>:8005<br/>~3.4 GB"]
+                tts["TTS<br/>:8006<br/>~2-3 GB"]
             end
 
-            orch["Orchestrator :8000<br/>FastAPI + LangGraph"]
-            qdrant["Qdrant :6333<br/>• econ_vn_news<br/>• econ_knowledge"]
-            webui["Open WebUI :8080"]
-            tunnel["Cloudflare Tunnel<br/>→ quannguyen.works"]
+            qdrant["Qdrant<br/>econ_vn_news<br/>econ_knowledge"]
         end
 
-        subgraph DataStore["Data Store (local filesystem)"]
-            raw["data/raw/"]
-            parsed["data/parsed/"]
-            images["data/images/"]
+        subgraph fs["Local Data Store"]
+            raw["data/raw"]
+            parsed["data/parsed"]
+            images["data/images"]
         end
     end
 
-    %% Connections
-    webui --> orch
+    subgraph remote["Remote Services / Internet"]
+        llm["vLLM / Qwen3.5-4B<br/>:8004"]
+        vlm["VLM / Qwen3-VL-4B<br/>:8007"]
+        tavily["Tavily Search API"]
+    end
+
     tunnel --> webui
+    webui --> orch
+
     orch --> emb
     orch --> rrk
     orch --> grd
     orch --> asr
     orch --> tts
     orch --> qdrant
-    orch --> vastai
+    orch --> llm
+    orch --> vlm
     orch --> tavily
 
-    %% Styling
-    classDef gpu fill:#ff6b6b,color:#fff
-    classDef service fill:#4ecdc4,color:#fff
-    classDef storage fill:#45b7d1,color:#fff
-    classDef remote fill:#f9ca24,color:#333
+    qdrant --- raw
+    qdrant --- parsed
+    qdrant --- images
+
+    classDef gpu fill:#ef4444,color:#fff,stroke:#991b1b
+    classDef service fill:#0ea5e9,color:#fff,stroke:#075985
+    classDef storage fill:#22c55e,color:#fff,stroke:#166534
+    classDef remote fill:#facc15,color:#111827,stroke:#a16207
 
     class emb,rrk,grd,asr,tts gpu
     class orch,webui,tunnel service
     class qdrant,raw,parsed,images storage
-    class vastai,tavily remote
+    class llm,vlm,tavily remote

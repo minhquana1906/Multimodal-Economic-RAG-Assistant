@@ -1,73 +1,67 @@
-flowchart TB
-    subgraph Stage1["STAGE 1: CRAWL & COLLECT"]
-        web_crawl["Web Crawlers<br/>(httpx + BS4)"]
-        pdf_crawl["PDF Downloaders<br/>(requests + Selenium)"]
-        acad_crawl["Academic Scrapers<br/>(Selenium + httpx)"]
-
-        web_crawl --> raw_store
-        pdf_crawl --> raw_store
-        acad_crawl --> raw_store
-
-        raw_store[("data/raw/{source}/<br/>{date}/{hash}.html|pdf")]
+flowchart TD
+    subgraph s1["Stage 1 - Crawl & Collect"]
+        web_crawl["Web crawl<br/>httpx + BS4"]
+        pdf_crawl["PDF download<br/>requests + Selenium"]
+        acad_crawl["Academic scrape<br/>Selenium + httpx"]
+        raw_store[("data/raw/{source}/{date}/{hash}")]
     end
 
-    subgraph Stage2["STAGE 2: PARSE & EXTRACT"]
-        html_parse["HTML Parser<br/>(trafilatura + BS4)"]
-        pdf_parse["PDF Parser<br/>(pdfplumber + PyMuPDF)"]
-        vis_extract["Visual Extractor<br/>(detect charts/tables)"]
-
-        raw_store --> html_parse
-        raw_store --> pdf_parse
-        pdf_parse --> vis_extract
-
-        html_parse --> parsed_store
-        pdf_parse --> parsed_store
-        vis_extract --> image_store
-
-        parsed_store[("data/parsed/{source}/<br/>{hash}.json")]
-        image_store[("data/images/<br/>{hash}_{pg}_{i}.png")]
+    subgraph s2["Stage 2 - Parse & Extract"]
+        html_parse["Parse HTML<br/>trafilatura + BS4"]
+        pdf_parse["Parse PDF<br/>pdfplumber + PyMuPDF"]
+        vis_extract["Extract visuals<br/>charts / tables"]
+        parsed_store[("data/parsed/{source}/{hash}.json")]
+        image_store[("data/images/{hash}_{pg}_{i}.png")]
     end
 
-    subgraph Stage3["STAGE 3: CHUNK & ENRICH"]
-        text_chunk["Text Chunker<br/>• title_lead<br/>• body_paragraph<br/>• section_content<br/>• definition"]
-
-        vlm_table["VLM /extract-table<br/>→ markdown table"]
-        vlm_chart["VLM /describe-chart<br/>→ text description<br/>+ key insights"]
-
-        parsed_store --> text_chunk
-        image_store --> classify{"Table or<br/>Chart?"}
-        classify -->|"table<br/>(grid lines)"| vlm_table
-        classify -->|"chart<br/>(no grid)"| vlm_chart
-
-        text_chunk --> unified
-        vlm_table --> unified
-        vlm_chart --> unified
-
-        unified["Unified Chunks<br/>[{chunk_id, doc_id,<br/>chunk_type, text,<br/>image_path, metadata}]"]
+    subgraph s3["Stage 3 - Chunk & Enrich"]
+        text_chunk["Chunk text<br/>title_lead / body / section / definition"]
+        classify{"Visual type?"}
+        vlm_table["VLM table<br/>markdown + raw text"]
+        vlm_chart["VLM chart<br/>description + insights"]
+        unified["Unified chunks<br/>text + metadata + image_path"]
     end
 
-    subgraph Stage4["STAGE 4: EMBED & INDEX"]
-        embed_dense["Embedding Service<br/>dense vector (1024d)"]
-        embed_sparse["BM25 Tokenizer<br/>sparse vector<br/>(underthesea)"]
-
-        unified --> embed_dense
-        unified --> embed_sparse
-
-        embed_dense --> qdrant
-        embed_sparse --> qdrant
-
-        qdrant[("Qdrant<br/>Collection: econ_knowledge<br/>• dense + sparse vectors<br/>• full payload<br/>• image_path ref")]
+    subgraph s4["Stage 4 - Embed & Index"]
+        embed_dense["Dense embed<br/>1024d"]
+        embed_sparse["Sparse BM25<br/>underthesea"]
+        qdrant[("Qdrant / econ_knowledge")]
     end
 
-    %% Styling
-    classDef crawl fill:#e74c3c,color:#fff
-    classDef parse fill:#3498db,color:#fff
-    classDef enrich fill:#2ecc71,color:#fff
-    classDef index fill:#9b59b6,color:#fff
-    classDef store fill:#f39c12,color:#333
+    web_crawl --> raw_store
+    pdf_crawl --> raw_store
+    acad_crawl --> raw_store
+
+    raw_store --> html_parse
+    raw_store --> pdf_parse
+    pdf_parse --> vis_extract
+
+    html_parse --> parsed_store
+    pdf_parse --> parsed_store
+    vis_extract --> image_store
+
+    parsed_store --> text_chunk
+    image_store --> classify
+    classify -->|table| vlm_table
+    classify -->|chart| vlm_chart
+
+    text_chunk --> unified
+    vlm_table --> unified
+    vlm_chart --> unified
+
+    unified --> embed_dense
+    unified --> embed_sparse
+    embed_dense --> qdrant
+    embed_sparse --> qdrant
+
+    classDef crawl fill:#ef4444,color:#fff,stroke:#991b1b
+    classDef parse fill:#3b82f6,color:#fff,stroke:#1d4ed8
+    classDef enrich fill:#10b981,color:#fff,stroke:#047857
+    classDef index fill:#8b5cf6,color:#fff,stroke:#6d28d9
+    classDef store fill:#f59e0b,color:#111827,stroke:#b45309
 
     class web_crawl,pdf_crawl,acad_crawl crawl
     class html_parse,pdf_parse,vis_extract parse
-    class text_chunk,vlm_table,vlm_chart,classify enrich
+    class text_chunk,classify,vlm_table,vlm_chart enrich
     class embed_dense,embed_sparse index
     class raw_store,parsed_store,image_store,unified,qdrant store
