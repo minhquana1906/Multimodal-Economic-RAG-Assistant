@@ -51,4 +51,5 @@ class ChunkContext(BaseModel):
     text: str
     source: str = ""
     title: str = ""
+    url: str = ""
     score: float = 0.0

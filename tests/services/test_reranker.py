@@ -8,14 +8,13 @@ from httpx import AsyncClient, ASGITransport
 def mock_reranker():
     """Mock transformers model and tokenizer.
 
-    Patching at `reranker_app.*` works because the `client` fixture calls
-    `importlib.reload(reranker_app)` — this re-executes the module's top-level
-    imports, and the patches are already in place at that point, so the
-    reloaded module picks up the mocks rather than the real classes.
+    We patch `transformers.*` because the service module imports those
+    symbols at module load time and `importlib.reload(reranker_app)` re-executes
+    that import path.
     """
     with (
-        patch("reranker_app.AutoModelForCausalLM") as mock_model_cls,
-        patch("reranker_app.AutoTokenizer") as mock_tok_cls,
+        patch("transformers.AutoModelForCausalLM") as mock_model_cls,
+        patch("transformers.AutoTokenizer") as mock_tok_cls,
     ):
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -136,11 +135,11 @@ async def test_lifespan_loads_reranker_with_standard_runtime_settings(mock_reran
 
     mock_tokenizer.convert_tokens_to_ids.assert_any_call("yes")
     mock_tokenizer.convert_tokens_to_ids.assert_any_call("no")
-    mock_tokenizer.from_pretrained.assert_called_once_with(
+    reranker_app.AutoTokenizer.from_pretrained.assert_called_once_with(
         reranker_app.MODEL_NAME,
         padding_side="left",
     )
-    mock_model.from_pretrained.assert_called_once_with(
+    reranker_app.AutoModelForCausalLM.from_pretrained.assert_called_once_with(
         reranker_app.MODEL_NAME,
         torch_dtype="auto",
         device_map="auto",
