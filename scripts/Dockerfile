@@ -1,14 +1,12 @@
-FROM python:3.12-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+FROM astral/uv:python3.12-trixie-slim
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --no-cache --system -r requirements.txt
 
-COPY ingest.py .
+COPY . /app
 
-CMD ["python", "ingest.py"]
+RUN ls -la /app
+
+CMD ["uv", "run", "ingest.py"]
