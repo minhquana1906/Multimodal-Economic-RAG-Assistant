@@ -15,6 +15,7 @@ from orchestrator.services.embedder import EmbedderClient
 from orchestrator.services.retriever import RetrieverClient
 from orchestrator.services.reranker import RerankerClient
 from orchestrator.services.llm import LLMClient
+from orchestrator.services.sparse_encoder import SparseEncoderService
 from orchestrator.services.web_search import WebSearchClient
 
 
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
                 settings.services.embedding_url,
                 settings.services.embedding_timeout,
             ),
+            sparse_encoder=SparseEncoderService(),
             retriever=RetrieverClient(
                 settings.services.qdrant_url,
                 settings.services.qdrant_collection,
