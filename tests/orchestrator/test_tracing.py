@@ -1,5 +1,6 @@
 import logging
 import os
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -37,3 +38,32 @@ def test_setup_langsmith_with_key_sets_env(monkeypatch):
     assert os.environ["LANGCHAIN_TRACING_V2"] == "true"
     assert os.environ["LANGCHAIN_API_KEY"] == "ls-test"
     assert os.environ["LANGCHAIN_PROJECT"] == "proj"
+
+
+@pytest.mark.asyncio
+async def test_execute_chat_turn_root_output_excludes_generation_prompt():
+    from orchestrator.routers.chat import execute_chat_turn
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(
+        return_value={
+            "answer": "GDP tăng 7%",
+            "citations": [{"context_id": "hybrid:1"}],
+            "generation_prompt": "Context that should not appear",
+            "final_context": [{"context_id": "hybrid:1"}],
+        }
+    )
+
+    result = await execute_chat_turn(
+        mock_graph,
+        None,
+        messages=[{"role": "user", "content": "GDP Việt Nam?"}],
+        max_tokens=None,
+    )
+
+    assert result["answer"] == "GDP tăng 7%"
+    assert result["citations"] == [{"context_id": "hybrid:1"}]
+    assert result["task_type"] == "chat"
+    assert result["resolved_query"] == "GDP Việt Nam?"
+    assert "generation_prompt" not in result
+    assert "final_context" not in result

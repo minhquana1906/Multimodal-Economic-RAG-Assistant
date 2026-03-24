@@ -10,6 +10,7 @@ dependencies = [
     "fastapi==0.115.12",
     "uvicorn[standard]==0.34.2",
     "httpx>=0.28.1",
+    "python-multipart>=0.0.20",
     "qdrant-client>=1.17.1",
     "openai==1.82.0",
     "pydantic==2.11.3",
@@ -23,7 +24,10 @@ dependencies = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "--import-mode=importlib"
+addopts = '--import-mode=importlib -m "not integration"'
+markers = [
+    "integration: requires Docker, pinned service images, or GPU-backed runtime and is skipped by default",
+]
 
 [dependency-groups]
 dev = [

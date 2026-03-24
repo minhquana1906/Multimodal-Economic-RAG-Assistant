@@ -52,6 +52,13 @@ def test_dev_compose_uses_anchors_for_shared_dev_config():
     assert "<<: *gpu-reservation" in content
 
 
+def test_dev_compose_sets_guard_memory_env_defaults():
+    content = (ROOT / "docker-compose.dev.yaml").read_text(encoding="utf-8")
+
+    assert content.count("PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True") >= 3
+    assert "GUARD_MAX_NEW_TOKENS: ${GUARD_MAX_NEW_TOKENS:-64}" in content
+
+
 def test_makefile_contains_direct_dev_compose_targets():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 

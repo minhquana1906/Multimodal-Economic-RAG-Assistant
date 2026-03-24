@@ -7,9 +7,22 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class TextContentPart(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+MessageContent = str | list[TextContentPart]
+
+
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: MessageContent
+
+    def text_content(self) -> str:
+        if isinstance(self.content, str):
+            return self.content
+        return "".join(part.text for part in self.content if part.type == "text")
 
 
 class ChatRequest(BaseModel):
@@ -20,12 +33,23 @@ class ChatRequest(BaseModel):
     stream: bool = False
 
 
+class AssistantMessage(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str
+
+
 class ChatDelta(BaseModel):
     role: str | None = None
     content: str = ""
 
 
-class ChatChoice(BaseModel):
+class ChatCompletionChoice(BaseModel):
+    message: AssistantMessage
+    index: int = 0
+    finish_reason: str | None = "stop"
+
+
+class ChatStreamChoice(BaseModel):
     delta: ChatDelta
     index: int = 0
     finish_reason: str | None = None
@@ -36,7 +60,7 @@ class ChatResponse(BaseModel):
     object: str = "chat.completion"
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: list[ChatChoice]
+    choices: list[ChatCompletionChoice]
 
 
 class ChatStreamChunk(BaseModel):
@@ -44,12 +68,23 @@ class ChatStreamChunk(BaseModel):
     object: str = "chat.completion.chunk"
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: list[ChatChoice]
+    choices: list[ChatStreamChoice]
 
 
 class ChunkContext(BaseModel):
+    context_id: str = ""
     text: str
+    source_type: str = ""
+    retrieval_stage: str = ""
+    original_rank: int = -1
+    collection_name: str = ""
+    doc_type: str = ""
+    chunk_type: str = ""
+    modality: str = "text"
+    source_quality: str = ""
     source: str = ""
     title: str = ""
     url: str = ""
     score: float = 0.0
+    image_path: str = ""
+    structured_data: dict = Field(default_factory=dict)

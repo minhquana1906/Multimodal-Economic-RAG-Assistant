@@ -1,4 +1,5 @@
 import importlib
+from contextlib import nullcontext
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -90,6 +91,30 @@ async def test_classify_input_safe(client, mock_guard):
     assert response.json()["safe_label"] == "Safe"
     assert response.json()["categories"] == []
     assert response.json()["refusal"] is None
+
+
+async def test_classify_uses_inference_mode_disables_cache_and_logs_metrics(client, mock_guard):
+    mock_model, mock_tokenizer = mock_guard
+    _setup_classify_mock(
+        mock_model,
+        mock_tokenizer,
+        "Safety: Safe\nCategory: None\nSome explanation",
+    )
+
+    with patch("guard_app.torch.inference_mode", return_value=nullcontext()) as mock_inference:
+        with patch("guard_app._cleanup_tensors") as mock_cleanup:
+            with patch("guard_app._log_request_metrics") as mock_metrics:
+                response = await client.post(
+                    "/classify",
+                    json={"text": "What is GDP?", "role": "input"},
+                )
+
+    assert response.status_code == 200
+    assert mock_inference.called
+    assert mock_model.generate.call_args.kwargs["use_cache"] is False
+    assert mock_model.generate.call_args.kwargs["max_new_tokens"] == 64
+    mock_cleanup.assert_called_once()
+    mock_metrics.assert_called_once()
 
 
 async def test_classify_input_unsafe(client, mock_guard):

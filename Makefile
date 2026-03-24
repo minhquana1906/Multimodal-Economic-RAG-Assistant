@@ -14,7 +14,13 @@ IMAGE_TTS := $(DOCKERHUB_NAMESPACE)/eco-rag-tts:$(IMAGE_TAG)
 IMAGE_ORCHESTRATOR := $(DOCKERHUB_NAMESPACE)/eco-rag-orchestrator:$(IMAGE_TAG)
 IMAGE_INGEST := $(DOCKERHUB_NAMESPACE)/eco-rag-ingest:$(IMAGE_TAG)
 
-.PHONY: dev-cache dev-build dev-up dev-down dev-restart dev-logs dev-ps dev-audio-up dev-ingest vast-pull vast-up vast-down vast-logs vast-ps images-build images-push images-build-push
+.PHONY: test test-integration dev-cache dev-build dev-up dev-down dev-restart dev-logs dev-ps dev-audio-up dev-ingest vast-pull vast-up vast-down vast-logs vast-ps images-build images-push images-build-push
+
+test:
+	uv run pytest
+
+test-integration:
+	uv run pytest -m integration
 
 # Dev env
 dev-cache:
