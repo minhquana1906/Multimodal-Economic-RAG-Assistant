@@ -55,11 +55,11 @@ class OnDemandModel:
             if self.model is None:
                 self._loading = True
                 try:
-                    logger.info("Loading ASR model: {} ...", MODEL_NAME)
+                    logger.info(f"Loading ASR model: {MODEL_NAME} ...")
                     t0 = time.monotonic()
                     self.model = await asyncio.to_thread(self._load_model)
                     elapsed = time.monotonic() - t0
-                    logger.info("ASR model loaded in {:.1f}s", elapsed)
+                    logger.info(f"ASR model loaded in {elapsed:.1f}s")
                 finally:
                     self._loading = False
             self._reset_idle_timer()
@@ -75,11 +75,7 @@ class OnDemandModel:
             "max_new_tokens": 256,
         }
         model = Qwen3ASRModel.from_pretrained(MODEL_NAME, **model_kwargs)
-        logger.info(
-            "ASR load config: model={} | dtype={}",
-            MODEL_NAME,
-            model_kwargs["dtype"],
-        )
+        logger.info(f"ASR load config: model={MODEL_NAME} | dtype={model_kwargs['dtype']}")
         return model
 
     async def unload(self):
@@ -112,7 +108,7 @@ class OnDemandModel:
         """Wait for idle timeout, then unload."""
         try:
             await asyncio.sleep(IDLE_TIMEOUT_S)
-            logger.info("Idle timeout ({}s) reached, unloading model...", IDLE_TIMEOUT_S)
+            logger.info(f"Idle timeout ({IDLE_TIMEOUT_S}s) reached, unloading model...")
             async with self._load_lock:
                 await self._do_unload()
         except asyncio.CancelledError:
@@ -126,10 +122,7 @@ on_demand = OnDemandModel()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
-        "ASR service started (model={}, idle_timeout={}s, max_duration={}s)",
-        MODEL_NAME,
-        IDLE_TIMEOUT_S,
-        MAX_DURATION_S,
+        f"ASR service started (model={MODEL_NAME}, idle_timeout={IDLE_TIMEOUT_S}s, max_duration={MAX_DURATION_S}s)"
     )
     yield
     await on_demand.unload()
@@ -193,7 +186,7 @@ async def transcribe(
     try:
         waveform, sr = await asyncio.to_thread(_decode_audio, audio_bytes)
     except Exception as e:
-        logger.error("Audio decode failed: {}", e)
+        logger.error(f"Audio decode failed: {e}")
         return JSONResponse({"detail": f"Failed to decode audio: {e}"}, status_code=400)
 
     # Check duration
@@ -220,12 +213,14 @@ async def transcribe(
             language=lang_name,
         )
     except Exception as e:
-        logger.error("ASR inference failed: {}", e)
+        logger.error(f"ASR inference failed: {e}")
         return JSONResponse({"detail": f"Transcription failed: {e}"}, status_code=500)
 
     text = results[0].text if results else ""
     latency_ms = int((time.monotonic() - t0) * 1000)
-    logger.info("ASR: lang={} duration={:.1f}s latency={}ms text_len={}", language, duration_s, latency_ms, len(text))
+    logger.info(
+        f"ASR: lang={language} duration={duration_s:.1f}s latency={latency_ms}ms text_len={len(text)}"
+    )
 
     if not text.strip():
         return JSONResponse({"detail": "Could not transcribe audio — empty result"}, status_code=400)

@@ -47,5 +47,5 @@ class WebSearchClient:
                     for r in results
                 ]
         except Exception as e:
-            logger.error("Web search error: {}", e)
+            logger.error(f"Web search error: {e}")
             return []
