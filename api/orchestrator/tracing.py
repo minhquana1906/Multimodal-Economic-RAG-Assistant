@@ -68,6 +68,4 @@ def setup_langsmith(config: ObservabilityConfig) -> None:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_API_KEY"] = config.langsmith_api_key
     os.environ["LANGCHAIN_PROJECT"] = config.langsmith_project
-    logger.info(
-        "LangSmith tracing enabled for project: {}", config.langsmith_project
-    )
+    logger.info(f"LangSmith tracing enabled for project: {config.langsmith_project}")

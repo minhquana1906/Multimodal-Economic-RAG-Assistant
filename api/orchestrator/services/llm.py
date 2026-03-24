@@ -53,14 +53,11 @@ class LLMClient:
             )
             logger.log(
                 "LLM",
-                "model={} tokens={} latency_ms={}",
-                self._model,
-                tokens,
-                latency_ms,
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms}",
             )
             return content or ""
         except Exception as e:
-            logger.error("LLM generation error: {}", e)
+            logger.error(f"LLM generation error: {e}")
             return "Xin lỗi, không thể tạo phản hồi."
 
     async def complete_prompt(self, prompt: str, max_tokens: int | None = None) -> str:
@@ -72,12 +69,9 @@ class LLMClient:
             )
             logger.log(
                 "LLM",
-                "model={} tokens={} latency_ms={} task=aux",
-                self._model,
-                tokens,
-                latency_ms,
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=aux",
             )
             return content or ""
         except Exception as e:
-            logger.error("Auxiliary LLM generation error: {}", e)
+            logger.error(f"Auxiliary LLM generation error: {e}")
             return ""

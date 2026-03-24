@@ -1,5 +1,6 @@
 import pytest
 import torch
+from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 from httpx import AsyncClient, ASGITransport
 
@@ -90,6 +91,39 @@ async def test_rerank_returns_scores(client, mock_reranker):
     data = response.json()
     assert len(data["scores"]) == 1
     assert data["scores"][0] > 0.5
+
+
+async def test_rerank_uses_inference_mode_and_cleanup_hooks(client, mock_reranker):
+    mock_model, mock_tokenizer = mock_reranker
+    mock_inputs = {"input_ids": torch.tensor([[1, 2, 3]])}
+    mock_tokenizer.__call__ = MagicMock(
+        return_value=MagicMock(
+            **{
+                "to.return_value": mock_inputs,
+            }
+        )
+    )
+
+    mock_logits = torch.zeros(1, 3, 50000)
+    mock_logits[0, -1, 9891] = 2.0
+    mock_logits[0, -1, 2822] = 0.5
+    mock_output = MagicMock()
+    mock_output.logits = mock_logits
+    mock_model.return_value = mock_output
+    mock_model.device = torch.device("cpu")
+
+    with patch("reranker_app.torch.inference_mode", return_value=nullcontext()) as mock_inference:
+        with patch("reranker_app._cleanup_tensors") as mock_cleanup:
+            with patch("reranker_app._log_request_metrics") as mock_metrics:
+                response = await client.post(
+                    "/rerank",
+                    json={"query": "GDP Việt Nam", "passages": ["GDP tăng 7%"]},
+                )
+
+    assert response.status_code == 200
+    assert mock_inference.called
+    assert mock_cleanup.call_count >= 1
+    mock_metrics.assert_called_once()
 
 
 async def test_rerank_empty_passages(client, mock_reranker):

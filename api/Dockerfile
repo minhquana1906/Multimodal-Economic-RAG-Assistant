@@ -1,11 +1,14 @@
 FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements.txt .
 RUN uv pip install --system --no-cache -r requirements.txt
 
-COPY . .
+COPY orchestrator /app/orchestrator
 
 EXPOSE 8000
 

@@ -56,15 +56,11 @@ class GuardClient:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "GUARD",
-                    "role=input label={} safe_label={} categories={} latency_ms={}",
-                    result["label"],
-                    result["safe_label"],
-                    result["categories"],
-                    latency_ms,
+                    f"role=input label={result['label']} safe_label={result['safe_label']} categories={result['categories']} latency_ms={latency_ms}",
                 )
                 return result
         except Exception as e:
-            logger.error("Guard service error: {}", e)
+            logger.error(f"Guard service error: {e}")
             return dict(_DEFAULT_GUARD_RESULT)
 
     @traceable(name="Check Output Safety", run_type="chain")
@@ -83,14 +79,9 @@ class GuardClient:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "GUARD",
-                    "role=output label={} safe_label={} categories={} refusal={} latency_ms={}",
-                    result["label"],
-                    result["safe_label"],
-                    result["categories"],
-                    result["refusal"],
-                    latency_ms,
+                    f"role=output label={result['label']} safe_label={result['safe_label']} categories={result['categories']} refusal={result['refusal']} latency_ms={latency_ms}",
                 )
                 return result
         except Exception as e:
-            logger.error("Guard service error: {}", e)
+            logger.error(f"Guard service error: {e}")
             return dict(_DEFAULT_GUARD_RESULT)

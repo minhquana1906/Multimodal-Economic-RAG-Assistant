@@ -61,11 +61,11 @@ class OnDemandModel:
             if self.model is None:
                 self._loading = True
                 try:
-                    logger.info("Loading TTS model: {} ...", TTS_MODEL)
+                    logger.info(f"Loading TTS model: {TTS_MODEL} ...")
                     t0 = time.monotonic()
                     self.model = await asyncio.to_thread(self._load_model)
                     elapsed = time.monotonic() - t0
-                    logger.info("TTS model loaded in {:.1f}s", elapsed)
+                    logger.info(f"TTS model loaded in {elapsed:.1f}s")
                 finally:
                     self._loading = False
             self._reset_idle_timer()
@@ -93,7 +93,7 @@ class OnDemandModel:
             try:
                 self.model.close()
             except Exception as e:
-                logger.warning("Error during model close: {}", e)
+                logger.warning(f"Error during model close: {e}")
             del self.model
             self.model = None
             torch.cuda.empty_cache()
@@ -115,7 +115,7 @@ class OnDemandModel:
         """Wait for idle timeout, then unload."""
         try:
             await asyncio.sleep(IDLE_TIMEOUT_S)
-            logger.info("Idle timeout ({}s) reached, unloading model...", IDLE_TIMEOUT_S)
+            logger.info(f"Idle timeout ({IDLE_TIMEOUT_S}s) reached, unloading model...")
             async with self._load_lock:
                 await self._do_unload()
         except asyncio.CancelledError:
@@ -129,10 +129,7 @@ on_demand = OnDemandModel()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(
-        "TTS service started (model={}, idle_timeout={}s, sample_rate={})",
-        TTS_MODEL,
-        IDLE_TIMEOUT_S,
-        SAMPLE_RATE,
+        f"TTS service started (model={TTS_MODEL}, idle_timeout={IDLE_TIMEOUT_S}s, sample_rate={SAMPLE_RATE})"
     )
     yield
     await on_demand.unload()
@@ -208,8 +205,7 @@ async def synthesize(req: SynthesizeRequest):
         return JSONResponse({"detail": "No speakable text after preprocessing"}, status_code=400)
 
     logger.info(
-        "Synthesizing {} sentence(s), speed={}, sample_rate={}",
-        len(sentences), req.speed, req.sample_rate,
+        f"Synthesizing {len(sentences)} sentence(s), speed={req.speed}, sample_rate={req.sample_rate}"
     )
 
     # Get model (loads on-demand if needed)
@@ -230,7 +226,7 @@ async def synthesize(req: SynthesizeRequest):
             )
             audio_chunks.append(chunk)
         except Exception as e:
-            logger.error("TTS inference failed on sentence {}: {}", i, e)
+            logger.error(f"TTS inference failed on sentence {i}: {e}")
             return JSONResponse(
                 {"detail": f"Synthesis failed on sentence {i}: {e}"},
                 status_code=500,
@@ -250,10 +246,7 @@ async def synthesize(req: SynthesizeRequest):
     duration_s = len(full_audio) / output_sr
 
     logger.info(
-        "TTS: {} sentences, duration={:.1f}s, latency={:.1f}s",
-        len(sentences),
-        duration_s,
-        elapsed,
+        f"TTS: {len(sentences)} sentences, duration={duration_s:.1f}s, latency={elapsed:.1f}s"
     )
 
     # Convert to WAV
@@ -278,8 +271,7 @@ async def stream(req: SynthesizeRequest):
         return JSONResponse({"detail": "No speakable text after preprocessing"}, status_code=400)
 
     logger.info(
-        "Streaming {} sentence(s), speed={}, sample_rate={}",
-        len(sentences), req.speed, req.sample_rate,
+        f"Streaming {len(sentences)} sentence(s), speed={req.speed}, sample_rate={req.sample_rate}"
     )
 
     output_sr = req.sample_rate
@@ -304,7 +296,7 @@ async def stream(req: SynthesizeRequest):
                 )
                 yield f"data: {event_data}\n\n"
             except Exception as e:
-                logger.error("TTS stream failed on sentence {}: {}", i, e)
+                logger.error(f"TTS stream failed on sentence {i}: {e}")
                 error_data = json.dumps({"error": str(e), "index": i})
                 yield f"data: {error_data}\n\n"
                 break

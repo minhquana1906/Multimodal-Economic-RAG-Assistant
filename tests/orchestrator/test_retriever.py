@@ -21,7 +21,7 @@ async def test_retriever_returns_empty_on_error():
 @pytest.mark.asyncio
 async def test_retriever_hybrid_passes_sparse_vector():
     """When sparse_vector is provided, query_points is called with Prefetch + FusionQuery."""
-    from orchestrator.services.retriever import RetrieverClient
+    from orchestrator.services.retriever import RetrieverClient, SPARSE_VECTOR_NAME
     from qdrant_client.models import Fusion, FusionQuery
 
     retriever = RetrieverClient("http://qdrant:6333", "test_collection")
@@ -54,6 +54,7 @@ async def test_retriever_hybrid_passes_sparse_vector():
     call_kwargs = mock_qp.call_args.kwargs
     assert "prefetch" in call_kwargs
     assert len(call_kwargs["prefetch"]) == 2
+    assert call_kwargs["prefetch"][1].using == SPARSE_VECTOR_NAME
     assert isinstance(call_kwargs["query"], FusionQuery)
     assert call_kwargs["query"].fusion == Fusion.RRF
 

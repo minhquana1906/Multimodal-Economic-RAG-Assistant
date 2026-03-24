@@ -43,12 +43,9 @@ class RerankerClient:
                 top_score = result[0]["score"] if result else 0.0
                 logger.log(
                     "RERANK",
-                    "input={} output={} top_score={:.4f}",
-                    len(passages),
-                    len(result),
-                    top_score,
+                    f"input={len(passages)} output={len(result)} top_score={top_score:.4f}",
                 )
                 return result
         except Exception as e:
-            logger.error("Reranking error: {}", e)
+            logger.error(f"Reranking error: {e}")
             return [{"index": i, "score": 0.0} for i in range(min(len(passages), top_n))]
