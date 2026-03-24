@@ -44,10 +44,21 @@ async def test_web_search_normalizes_url_source_and_score():
 
     assert result == [
         {
+            "context_id": "web:0",
             "text": "GDP content",
             "title": "GDP outlook",
             "url": "https://example.com/economy/gdp-outlook",
             "source": "example.com",
+            "source_type": "web",
+            "retrieval_stage": "web_fallback",
+            "original_rank": 0,
             "score": 0.42,
+            "collection_name": "",
+            "doc_type": "web_page",
+            "chunk_type": "web_snippet",
+            "modality": "text",
+            "source_quality": "external",
+            "image_path": "",
+            "structured_data": {},
         }
     ]

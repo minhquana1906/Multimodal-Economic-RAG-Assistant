@@ -38,13 +38,24 @@ class WebSearchClient:
                 results = response.json().get("results", [])
                 return [
                     {
+                        "context_id": f"web:{index}",
                         "text": r.get("content", ""),
                         "title": r.get("title", ""),
                         "url": r.get("url", ""),
                         "source": self._source_from_url(r.get("url", "")),
+                        "source_type": "web",
+                        "retrieval_stage": "web_fallback",
+                        "original_rank": index,
                         "score": r.get("score", 0.0),
+                        "collection_name": "",
+                        "doc_type": "web_page",
+                        "chunk_type": "web_snippet",
+                        "modality": "text",
+                        "source_quality": "external",
+                        "image_path": "",
+                        "structured_data": {},
                     }
-                    for r in results
+                    for index, r in enumerate(results)
                 ]
         except Exception as e:
             logger.error(f"Web search error: {e}")

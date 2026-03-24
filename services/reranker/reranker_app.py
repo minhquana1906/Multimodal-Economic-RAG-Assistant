@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,6 +25,38 @@ PREFIX = '<|im_start|>system\nJudge whether the Document meets the requirements 
 SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 INSTRUCTION = "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
 
+
+def _cuda_memory_value(name: str) -> int:
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return 0
+    is_available = getattr(cuda, "is_available", lambda: False)
+    if not is_available():
+        return 0
+    getter = getattr(cuda, name, None)
+    if getter is None:
+        return 0
+    try:
+        return int(getter())
+    except Exception:
+        return 0
+
+
+def _log_request_metrics(operation: str, started_at: float) -> None:
+    latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    logger.info(
+        "{} latency_ms={} memory_allocated={} memory_reserved={} max_memory_allocated={}",
+        operation,
+        latency_ms,
+        _cuda_memory_value("memory_allocated"),
+        _cuda_memory_value("memory_reserved"),
+        _cuda_memory_value("max_memory_allocated"),
+    )
+
+
+def _cleanup_tensors(*tensors: object) -> None:
+    for tensor in tensors:
+        del tensor
 
 
 @asynccontextmanager
@@ -74,6 +107,37 @@ def format_pair(query: str, document: str, instruction: str) -> str:
     return PREFIX + body + SUFFIX
 
 
+def _score_passage(query: str, passage: str, instruction: str) -> float:
+    formatted = format_pair(query, passage, instruction)
+    inputs = None
+    output = None
+    logits = None
+
+    try:
+        inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(model.device)
+        with torch.inference_mode():
+            output = model(**inputs)
+            logits = output.logits[:, -1, :]
+            true_score = logits[:, token_true_id].exp().item()
+            false_score = logits[:, token_false_id].exp().item()
+            if (true_score + false_score) == 0:
+                return 0.5
+            return true_score / (true_score + false_score)
+    finally:
+        _cleanup_tensors(inputs, logits, output)
+        inputs = None
+        logits = None
+        output = None
+
+
+def _run_rerank(query: str, passages: list[str], instruction: str) -> list[float]:
+    started_at = time.perf_counter()
+    try:
+        return [_score_passage(query, passage, instruction) for passage in passages]
+    finally:
+        _log_request_metrics("reranker.rerank", started_at)
+
+
 @app.post("/rerank", response_model=RerankResponse)
 async def rerank(request: RerankRequest):
     if model is None or tokenizer is None:
@@ -81,23 +145,12 @@ async def rerank(request: RerankRequest):
 
     effective_instruction = request.instruction or INSTRUCTION
 
-    def _score_passage(passage: str) -> float:
-        formatted = format_pair(request.query, passage, effective_instruction)
-        inputs = tokenizer(formatted, return_tensors="pt", padding=True).to(
-            model.device
-        )
-        with torch.no_grad():
-            logits = model(**inputs).logits[:, -1, :]
-            true_score = logits[:, token_true_id].exp().item()
-            false_score = logits[:, token_false_id].exp().item()
-            if (true_score + false_score) == 0:
-                return 0.5  # fallback when underflow occurs
-            return true_score / (true_score + false_score)
-
     # Note: passages are scored sequentially. For high-throughput production,
     # consider batching all passages in a single forward pass.
-    scores = []
-    for passage in request.passages:
-        score = await asyncio.to_thread(_score_passage, passage)
-        scores.append(score)
+    scores = await asyncio.to_thread(
+        _run_rerank,
+        request.query,
+        request.passages,
+        effective_instruction,
+    )
     return RerankResponse(scores=scores)

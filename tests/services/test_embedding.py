@@ -1,4 +1,5 @@
 import importlib
+from contextlib import nullcontext
 
 import numpy as np
 import pytest
@@ -17,6 +18,10 @@ def mock_sentence_transformer():
     """
     with patch("sentence_transformers.SentenceTransformer") as mock_cls:
         mock_instance = MagicMock()
+        mock_instance.max_seq_length = 1024
+        mock_instance.device = "cpu"
+        mock_instance.dtype = "float32"
+        mock_instance.get_sentence_embedding_dimension.return_value = 1024
         mock_cls.return_value = mock_instance
         yield mock_cls, mock_instance
 
@@ -95,6 +100,26 @@ async def test_embed_queries(client, mock_sentence_transformer):
     assert len(data["embeddings"][0]) == 1024
     call_kwargs = mock_model.encode.call_args
     assert call_kwargs.kwargs.get("prompt_name") == "query"
+
+
+async def test_embed_logs_memory_snapshots(client, mock_sentence_transformer):
+    _, mock_model = mock_sentence_transformer
+    mock_model.encode.return_value = np.array([[0.5] * 1024])
+
+    with patch("embedding_app._log_memory_snapshot") as mock_snapshot:
+        response = await client.post(
+            "/embed",
+            json={
+                "texts": ["GDP Việt Nam 2024"],
+                "is_query": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert mock_snapshot.call_count >= 2
+    stages = [call.args[0] for call in mock_snapshot.call_args_list]
+    assert "before_encode" in stages
+    assert "after_encode" in stages
 
 
 async def test_embed_empty_texts(client, mock_sentence_transformer):
