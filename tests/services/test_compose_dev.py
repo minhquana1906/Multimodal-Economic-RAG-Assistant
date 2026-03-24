@@ -56,7 +56,11 @@ def test_dev_compose_sets_guard_memory_env_defaults():
     content = (ROOT / "docker-compose.dev.yaml").read_text(encoding="utf-8")
 
     assert content.count("PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True") >= 3
-    assert "GUARD_MAX_NEW_TOKENS: ${GUARD_MAX_NEW_TOKENS:-64}" in content
+    assert "GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}" in content
+    assert "EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}" in content
+    assert "MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}" in content
+    assert "ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}" in content
+    assert "QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}" in content
 
 
 def test_makefile_contains_direct_dev_compose_targets():

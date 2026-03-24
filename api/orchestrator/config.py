@@ -7,48 +7,54 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMConfig(BaseModel):
-    url: str = "http://171.231.22.80:28066/v1"
-    model: str = "Qwen/Qwen3-4B-Instruct-2507"
-    temperature: float = 0.7
-    max_tokens: int = 2048
-    timeout: float = 60.0
+    url: str
+    model: str
+    temperature: float
+    max_tokens: int
+    timeout: float
     api_key: str = ""
 
 
 class ServicesConfig(BaseModel):
-    embedding_url: str = "http://embedding:8001"
-    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
-    embedding_timeout: float = 15.0
+    embedding_url: str
+    embedding_model: str
+    embedding_timeout: float
+    embedding_max_seq_length: int
+    embedding_encode_batch_size: int
 
-    reranker_url: str = "http://reranker:8002"
-    reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
-    reranker_timeout: float = 15.0
+    reranker_url: str
+    reranker_model: str
+    reranker_timeout: float
 
-    guard_url: str = "http://guard:8003"
-    guard_model: str = "Qwen/Qwen3Guard-Gen-0.6B"
-    guard_timeout: float = 10.0
+    guard_url: str
+    guard_model: str
+    guard_timeout: float
+    guard_max_new_tokens: int
 
-    qdrant_url: str = "http://qdrant:6333"
-    qdrant_collection: str = "econ_vn_news"
+    asr_url: str
+    asr_model: str
+    asr_timeout: float
+    asr_max_duration_s: int
+    asr_idle_timeout: int
 
-    # ASR Service (on-demand, profile: audio)
-    asr_url: str = "http://asr:8005"
-    asr_timeout: float = 30.0
-    asr_max_duration_s: int = 60
+    tts_url: str
+    tts_model: str
+    tts_timeout: float
+    tts_speed: float
+    tts_sample_rate: int
+    tts_idle_timeout: int
 
-    # TTS Service (on-demand, profile: audio)
-    tts_url: str = "http://tts:8006"
-    tts_timeout: float = 30.0
-    tts_speed: float = 1.0
+    qdrant_url: str
+    qdrant_collection: str
 
 
 class RAGConfig(BaseModel):
-    retrieval_top_k: int = 20
-    rerank_top_n: int = 5
-    fallback_min_chunks: int = 3
-    fallback_score_threshold: float = 0.5
-    context_limit: int = 5
-    citation_limit: int = 5
+    retrieval_top_k: int
+    rerank_top_n: int
+    fallback_min_chunks: int
+    fallback_score_threshold: float
+    context_limit: int
+    citation_limit: int
 
 
 class PromptsConfig(BaseModel):
@@ -71,18 +77,18 @@ class PromptsConfig(BaseModel):
 
 
 class ObservabilityConfig(BaseModel):
-    log_level: str = "INFO"
+    log_level: str
     langsmith_api_key: str | None = None
-    langsmith_project: str = "multimodal-economic-rag"
+    langsmith_project: str
     tavily_api_key: str | None = None
 
 
 class Settings(BaseSettings):
-    llm: LLMConfig = LLMConfig()
-    services: ServicesConfig = ServicesConfig()
-    rag: RAGConfig = RAGConfig()
+    llm: LLMConfig
+    services: ServicesConfig
+    rag: RAGConfig
     prompts: PromptsConfig = PromptsConfig()
-    observability: ObservabilityConfig = ObservabilityConfig()
+    observability: ObservabilityConfig
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 DEV_COMPOSE := docker compose -f docker-compose.dev.yaml
-VAST_COMPOSE := docker compose --env-file .env.vast -f docker-compose.vast.yaml
+VAST_COMPOSE := docker compose -f docker-compose.vast.yaml
 SERVICE ?=
 DOCKERHUB_NAMESPACE ?= minhquan1906
 IMAGE_TAG ?= latest
