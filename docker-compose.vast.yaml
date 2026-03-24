@@ -32,7 +32,7 @@ volumes:
 
 services:
   qdrant:
-    image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.17.0}
+    image: qdrant/qdrant:v1.17.0
     hostname: qdrant
     pull_policy: always
     ports:
@@ -58,10 +58,10 @@ services:
       - "8001:8001"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      MAX_SEQ_LENGTH: ${SERVICES__MAX_SEQ_LENGTH:-1024}
-      ENCODE_BATCH_SIZE: ${SERVICES__ENCODE_BATCH_SIZE:-128}
+      MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
+      ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
       <<: *hf-cache-env
     volumes:
       - hf_cache:/data/huggingface
@@ -89,7 +89,7 @@ services:
       - "8002:8002"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      RERANKER_MODEL: ${SERVICES__RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
+      RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
       <<: *hf-cache-env
     volumes:
       - hf_cache:/data/huggingface
@@ -117,7 +117,8 @@ services:
       - "8003:8003"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      GUARD_MODEL: ${SERVICES__GUARD_MODEL:-Qwen/Qwen3Guard-Gen-0.6B}
+      GUARD_MODEL: ${SERVICES__GUARD_MODEL}
+      GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
       <<: *hf-cache-env
     volumes:
       - hf_cache:/data/huggingface
@@ -138,7 +139,7 @@ services:
 
   llm:
     <<: *gpu-1
-    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.18.0-x86_64-cu130}
+    image: vllm/vllm-openai:v0.18.0-x86_64-cu130
     hostname: llm
     pull_policy: always
     ipc: host
@@ -156,13 +157,13 @@ services:
       - --port
       - "8004"
       - --model
-      - ${LLM__MODEL:-Qwen/Qwen3-4B-Instruct}
+      - ${LLM__MODEL}
       - --served-model-name
-      - ${LLM__MODEL:-Qwen/Qwen3-4B-Instruct}
+      - ${LLM__MODEL}
       - --gpu-memory-utilization
-      - ${VLLM_LLM_GPU_MEMORY_UTILIZATION:-0.45}
+      - ${VLLM_LLM_GPU_MEMORY_UTILIZATION}
       - --max-model-len
-      - ${VLLM_LLM_MAX_MODEL_LEN:-8192}
+      - ${VLLM_LLM_MAX_MODEL_LEN}
     networks:
       - rag-net
     healthcheck:
@@ -198,13 +199,13 @@ services:
       - --port
       - "8007"
       - --model
-      - ${VLM_MODEL:-Qwen/Qwen3-VL-4B-Instruct}
+      - ${VLM_MODEL}
       - --served-model-name
-      - ${VLM_MODEL:-Qwen/Qwen3-VL-4B-Instruct}
+      - ${VLM_MODEL}
       - --gpu-memory-utilization
-      - ${VLLM_VLM_GPU_MEMORY_UTILIZATION:-0.45}
+      - ${VLLM_VLM_GPU_MEMORY_UTILIZATION}
       - --max-model-len
-      - ${VLLM_VLM_MAX_MODEL_LEN:-4096}
+      - ${VLLM_VLM_MAX_MODEL_LEN}
       - --limit-mm-per-prompt
       - image=1
     networks:
@@ -231,8 +232,8 @@ services:
     env_file:
       - .env.vast
     environment:
-      LLM__URL: ${LLM__URL:-http://llm:8004/v1}
-      LLM__MODEL: ${LLM__MODEL:-Qwen/Qwen3-4B-Instruct}
+      LLM__URL: ${LLM__URL}
+      LLM__MODEL: ${LLM__MODEL}
     networks:
       - rag-net
     depends_on:
@@ -260,7 +261,7 @@ services:
       start_period: 15s
 
   webui:
-    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.7.2}
+    image: ghcr.io/open-webui/open-webui:v0.7.2
     hostname: webui
     pull_policy: always
     ports:
@@ -298,9 +299,10 @@ services:
     image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-ingest:${IMAGE_TAG:-latest}
     pull_policy: always
     environment:
-      EMBEDDING_URL: http://embedding:8001
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-econ_vn_news}
+      SERVICES__EMBEDDING_URL: ${SERVICES__EMBEDDING_URL}
+      SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
+      SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
+      INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
       <<: *hf-cache-env
     volumes:
@@ -324,9 +326,9 @@ services:
       - "8005:8005"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      ASR_MODEL: ${SERVICES__ASR_MODEL:-Qwen/Qwen3-ASR-1.7B}
-      ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S:-60}
-      ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT:-300}
+      ASR_MODEL: ${SERVICES__ASR_MODEL}
+      ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
+      ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
       <<: *hf-cache-env
     volumes:
       - hf_cache:/data/huggingface
@@ -356,10 +358,10 @@ services:
       - "8006:8006"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      TTS_MODEL: ${SERVICES__TTS_MODEL:-pnnbao-ump/VieNeu-TTS}
-      TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT:-300}
-      TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE:-24000}
-      TTS_SPEED: ${SERVICES__TTS_SPEED:-1.0}
+      TTS_MODEL: ${SERVICES__TTS_MODEL}
+      TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
+      TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
+      TTS_SPEED: ${SERVICES__TTS_SPEED}
       <<: *hf-cache-env
     volumes:
       - hf_cache:/data/huggingface
