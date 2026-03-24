@@ -19,8 +19,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --break-system-packages --upgrade pip \
-    && pip install --break-system-packages torch==2.10.0+cu128 torchaudio==2.10.0+cu128 --index-url https://download.pytorch.org/whl/cu128 \
+RUN pip install --break-system-packages torch==2.10.0+cu128 torchaudio==2.10.0+cu128 --index-url https://download.pytorch.org/whl/cu128 \
     && pip install --break-system-packages -r requirements.txt
 
 COPY tts_app.py text_preprocessor.py abbreviations.py ./

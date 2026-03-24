@@ -41,6 +41,11 @@ def test_tts_dockerfile_installs_native_build_toolchain():
     assert 'PATH="/root/.cargo/bin:$PATH"' in content
 
 
+def test_tts_dockerfile_does_not_upgrade_apt_managed_pip():
+    content = _read("services/tts/Dockerfile")
+    assert "--upgrade pip" not in content
+
+
 def test_audio_service_dockerfiles_preinstall_matching_cuda_torch_stack():
     for dockerfile in [
         "services/asr/Dockerfile",
