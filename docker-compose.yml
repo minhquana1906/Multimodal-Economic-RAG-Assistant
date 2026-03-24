@@ -9,7 +9,7 @@ volumes:
 services:
   # === Qdrant Vector Database ===
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.17.0}
     hostname: qdrant
     ports:
       - "6333:6333"
@@ -70,6 +70,7 @@ services:
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
       - RERANKER_MODEL=${SERVICES__RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     networks:
       - rag-net
     deploy:
@@ -102,6 +103,8 @@ services:
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
       - GUARD_MODEL=${SERVICES__GUARD_MODEL:-Qwen/Qwen3Guard-Gen-0.6B}
+      - GUARD_MAX_NEW_TOKENS=${GUARD_MAX_NEW_TOKENS:-64}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     networks:
       - rag-net
     deploy:
@@ -159,7 +162,7 @@ services:
 
   # === Open WebUI ===
   webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.7.2}
     hostname: webui
     ports:
       - "8080:8080"
@@ -180,7 +183,7 @@ services:
 
   # === Cloudflare Tunnel ===
   tunnel:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
     hostname: tunnel
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:

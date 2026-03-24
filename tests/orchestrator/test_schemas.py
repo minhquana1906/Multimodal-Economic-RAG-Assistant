@@ -49,11 +49,37 @@ def test_chat_request_empty_messages_invalid():
 
 
 def test_chat_response_has_openai_fields():
-    from orchestrator.models.schemas import ChatChoice, ChatDelta, ChatResponse
+    from orchestrator.models.schemas import (
+        AssistantMessage,
+        ChatCompletionChoice,
+        ChatResponse,
+    )
     resp = ChatResponse(
         model="test",
-        choices=[ChatChoice(delta=ChatDelta(content="hello"))]
+        choices=[ChatCompletionChoice(message=AssistantMessage(content="hello"))]
     )
     assert resp.id.startswith("chatcmpl-")
     assert resp.object == "chat.completion"
     assert resp.created > 0
+
+
+def test_message_supports_text_content_parts():
+    from orchestrator.models.schemas import Message, TextContentPart
+
+    message = Message(
+        role="user",
+        content=[TextContentPart(text="GDP"), TextContentPart(text=" Việt Nam")],
+    )
+
+    assert message.text_content() == "GDP Việt Nam"
+
+
+def test_stream_chunk_uses_delta_contract():
+    from orchestrator.models.schemas import ChatDelta, ChatStreamChoice, ChatStreamChunk
+
+    chunk = ChatStreamChunk(
+        model="test",
+        choices=[ChatStreamChoice(delta=ChatDelta(role="assistant", content="hi"))],
+    )
+
+    assert chunk.choices[0].delta.content == "hi"

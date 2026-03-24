@@ -3,15 +3,22 @@ x-hf-cache-env: &hf-cache-env
   HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
   TRANSFORMERS_CACHE: /data/huggingface/hub
 
-x-hf-cache-volume: &hf-cache-volume ./.cache/huggingface:/data/huggingface
-
-x-gpu-reservation: &gpu-reservation
+x-gpu-0: &gpu-0
   deploy:
     resources:
       reservations:
         devices:
           - driver: nvidia
-            count: 1
+            device_ids: ["0"]
+            capabilities: [gpu]
+
+x-gpu-1: &gpu-1
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["1"]
             capabilities: [gpu]
 
 networks:
@@ -19,6 +26,7 @@ networks:
     driver: bridge
 
 volumes:
+  hf_cache:
   qdrant_storage:
   open-webui:
 
@@ -26,6 +34,7 @@ services:
   qdrant:
     image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.17.0}
     hostname: qdrant
+    pull_policy: always
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -41,10 +50,10 @@ services:
       start_period: 10s
 
   embedding:
-    <<: *gpu-reservation
-    build:
-      context: ./services/embedding
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-embedding:${IMAGE_TAG:-latest}
     hostname: embedding
+    pull_policy: always
     ports:
       - "8001:8001"
     environment:
@@ -55,8 +64,7 @@ services:
       ENCODE_BATCH_SIZE: ${SERVICES__ENCODE_BATCH_SIZE:-128}
       <<: *hf-cache-env
     volumes:
-      - *hf-cache-volume
-      - ./services/embedding:/app
+      - hf_cache:/data/huggingface
     networks:
       - rag-net
     healthcheck:
@@ -73,20 +81,18 @@ services:
       start_period: 120s
 
   reranker:
-    <<: *gpu-reservation
-    build:
-      context: ./services/reranker
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-reranker:${IMAGE_TAG:-latest}
     hostname: reranker
+    pull_policy: always
     ports:
       - "8002:8002"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
       RERANKER_MODEL: ${SERVICES__RERANKER_MODEL:-Qwen/Qwen3-Reranker-0.6B}
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
       <<: *hf-cache-env
     volumes:
-      - *hf-cache-volume
-      - ./services/reranker:/app
+      - hf_cache:/data/huggingface
     networks:
       - rag-net
     healthcheck:
@@ -103,21 +109,18 @@ services:
       start_period: 120s
 
   guard:
-    <<: *gpu-reservation
-    build:
-      context: ./services/guard
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-guard:${IMAGE_TAG:-latest}
     hostname: guard
+    pull_policy: always
     ports:
       - "8003:8003"
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
       GUARD_MODEL: ${SERVICES__GUARD_MODEL:-Qwen/Qwen3Guard-Gen-0.6B}
-      GUARD_MAX_NEW_TOKENS: ${GUARD_MAX_NEW_TOKENS:-64}
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
       <<: *hf-cache-env
     volumes:
-      - *hf-cache-volume
-      - ./services/guard:/app
+      - hf_cache:/data/huggingface
     networks:
       - rag-net
     healthcheck:
@@ -133,16 +136,103 @@ services:
       retries: 12
       start_period: 120s
 
+  llm:
+    <<: *gpu-1
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.18.0-x86_64-cu130}
+    hostname: llm
+    pull_policy: always
+    ipc: host
+    ports:
+      - "8004:8004"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8004"
+      - --model
+      - ${LLM__MODEL:-Qwen/Qwen3-4B-Instruct}
+      - --served-model-name
+      - ${LLM__MODEL:-Qwen/Qwen3-4B-Instruct}
+      - --gpu-memory-utilization
+      - ${VLLM_LLM_GPU_MEMORY_UTILIZATION:-0.45}
+      - --max-model-len
+      - ${VLLM_LLM_MAX_MODEL_LEN:-8192}
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 240s
+
+  vlm:
+    <<: *gpu-1
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.18.0-x86_64-cu130}
+    hostname: vlm
+    pull_policy: always
+    ipc: host
+    ports:
+      - "8007:8007"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8007"
+      - --model
+      - ${VLM_MODEL:-Qwen/Qwen3-VL-4B-Instruct}
+      - --served-model-name
+      - ${VLM_MODEL:-Qwen/Qwen3-VL-4B-Instruct}
+      - --gpu-memory-utilization
+      - ${VLLM_VLM_GPU_MEMORY_UTILIZATION:-0.45}
+      - --max-model-len
+      - ${VLLM_VLM_MAX_MODEL_LEN:-4096}
+      - --limit-mm-per-prompt
+      - image=1
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 240s
+
   orchestrator:
-    build:
-      context: ./api
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-orchestrator:${IMAGE_TAG:-latest}
     hostname: orchestrator
+    pull_policy: always
     ports:
       - "8000:8000"
     env_file:
-      - .env
-    volumes:
-      - ./api:/app
+      - .env.vast
+    environment:
+      LLM__URL: ${LLM__URL:-http://llm:8004/v1}
+      LLM__MODEL: ${LLM__MODEL:-Qwen/Qwen3-4B-Instruct}
     networks:
       - rag-net
     depends_on:
@@ -153,6 +243,8 @@ services:
       reranker:
         condition: service_healthy
       guard:
+        condition: service_healthy
+      llm:
         condition: service_healthy
     healthcheck:
       test:
@@ -170,6 +262,7 @@ services:
   webui:
     image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.7.2}
     hostname: webui
+    pull_policy: always
     ports:
       - "8080:8080"
     environment:
@@ -193,6 +286,7 @@ services:
   tunnel:
     image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
     hostname: tunnel
+    pull_policy: always
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
       - rag-net
@@ -201,8 +295,8 @@ services:
     restart: unless-stopped
 
   ingest:
-    build:
-      context: ./scripts
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-ingest:${IMAGE_TAG:-latest}
+    pull_policy: always
     environment:
       EMBEDDING_URL: http://embedding:8001
       QDRANT_URL: http://qdrant:6333
@@ -210,8 +304,7 @@ services:
       HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
       <<: *hf-cache-env
     volumes:
-      - *hf-cache-volume
-      - ./scripts:/app
+      - hf_cache:/data/huggingface
     networks:
       - rag-net
     depends_on:
@@ -223,10 +316,10 @@ services:
       - ingest
 
   asr:
-    <<: *gpu-reservation
-    build:
-      context: ./services/asr
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-asr:${IMAGE_TAG:-latest}
     hostname: asr
+    pull_policy: always
     ports:
       - "8005:8005"
     environment:
@@ -236,8 +329,7 @@ services:
       ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT:-300}
       <<: *hf-cache-env
     volumes:
-      - *hf-cache-volume
-      - ./services/asr:/app
+      - hf_cache:/data/huggingface
     networks:
       - rag-net
     healthcheck:
@@ -256,10 +348,10 @@ services:
       - audio
 
   tts:
-    <<: *gpu-reservation
-    build:
-      context: ./services/tts
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-tts:${IMAGE_TAG:-latest}
     hostname: tts
+    pull_policy: always
     ports:
       - "8006:8006"
     environment:
@@ -270,8 +362,7 @@ services:
       TTS_SPEED: ${SERVICES__TTS_SPEED:-1.0}
       <<: *hf-cache-env
     volumes:
-      - *hf-cache-volume
-      - ./services/tts:/app
+      - hf_cache:/data/huggingface
     networks:
       - rag-net
     healthcheck:

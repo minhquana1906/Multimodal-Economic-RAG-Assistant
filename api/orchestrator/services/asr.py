@@ -46,10 +46,7 @@ class ASRClient:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "RETRIEVAL",
-                    "ASR transcribe: lang={} duration={}s latency={}ms",
-                    language,
-                    data.get("duration_seconds", "?"),
-                    latency_ms,
+                    f"ASR transcribe: lang={language} duration={data.get('duration_seconds', '?')}s latency={latency_ms}ms",
                 )
                 return text
         except httpx.HTTPStatusError as e:
@@ -72,6 +69,6 @@ class ASRClient:
                     timeout=10.0,
                 )
                 response.raise_for_status()
-                logger.info("ASR model unloaded: {}", response.json())
+                logger.info(f"ASR model unloaded: {response.json()}")
         except Exception as e:
-            logger.warning("Failed to unload ASR model: {}", e)
+            logger.warning(f"Failed to unload ASR model: {e}")

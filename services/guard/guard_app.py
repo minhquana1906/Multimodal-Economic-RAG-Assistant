@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import sys
+import time
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -17,6 +18,7 @@ logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
 MODEL_NAME = os.getenv("GUARD_MODEL", "Qwen/Qwen3Guard-Gen-0.6B")
+MAX_NEW_TOKENS = int(os.getenv("GUARD_MAX_NEW_TOKENS", "64"))
 SAFETY_LABELS = {"safe": "Safe", "unsafe": "Unsafe", "controversial": "Controversial"}
 CATEGORY_NAMES = [
     "Non-violent Illegal Acts",
@@ -38,6 +40,38 @@ model = None
 tokenizer = None
 
 
+def _cuda_memory_value(name: str) -> int:
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return 0
+    is_available = getattr(cuda, "is_available", lambda: False)
+    if not is_available():
+        return 0
+    getter = getattr(cuda, name, None)
+    if getter is None:
+        return 0
+    try:
+        return int(getter())
+    except Exception:
+        return 0
+
+
+def _log_request_metrics(operation: str, started_at: float) -> None:
+    latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    logger.info(
+        "{} latency_ms={} memory_allocated={} memory_reserved={} max_memory_allocated={}",
+        operation,
+        latency_ms,
+        _cuda_memory_value("memory_allocated"),
+        _cuda_memory_value("memory_reserved"),
+        _cuda_memory_value("max_memory_allocated"),
+    )
+
+
+def _cleanup_tensors(*tensors: object) -> None:
+    for tensor in tensors:
+        del tensor
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -52,7 +86,7 @@ async def lifespan(app: FastAPI):
         device_map="auto",
     )
     model.eval()
-    logger.info("Guard model loaded: {}", MODEL_NAME)
+    logger.info(f"Guard model loaded: {MODEL_NAME}")
     yield
     model = None
     tokenizer = None
@@ -129,6 +163,7 @@ def _build_classification_result(output_text: str) -> dict:
 
 def _run_classify(text: str, role: str, prompt: str | None) -> dict:
     """Blocking classify logic — run in thread via asyncio.to_thread."""
+    started_at = time.perf_counter()
     if role == "input":
         messages = [{"role": "user", "content": text}]
     else:
@@ -140,12 +175,27 @@ def _run_classify(text: str, role: str, prompt: str | None) -> dict:
     formatted = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
-    with torch.no_grad():
-        output_ids = model.generate(**inputs, max_new_tokens=128)
-    new_tokens = output_ids[0][inputs["input_ids"].shape[-1] :]
-    output_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-    return _build_classification_result(output_text)
+    inputs = None
+    output_ids = None
+    new_tokens = None
+
+    try:
+        inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
+        with torch.inference_mode():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=MAX_NEW_TOKENS,
+                use_cache=False,
+            )
+        new_tokens = output_ids[0][inputs["input_ids"].shape[-1] :]
+        output_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
+        return _build_classification_result(output_text)
+    finally:
+        _cleanup_tensors(inputs, output_ids, new_tokens)
+        inputs = None
+        output_ids = None
+        new_tokens = None
+        _log_request_metrics("guard.classify", started_at)
 
 
 @app.post("/classify", response_model=ClassifyResponse)
