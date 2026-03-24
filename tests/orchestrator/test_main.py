@@ -32,6 +32,10 @@ async def test_create_app_wires_sparse_encoder_service(monkeypatch):
         qdrant_collection="econ_vn_news",
         reranker_url="http://reranker",
         reranker_timeout=5.0,
+        asr_url="http://asr",
+        asr_timeout=15.0,
+        tts_url="http://tts",
+        tts_timeout=25.0,
     )
 
     monkeypatch.setattr(main, "get_settings", lambda: settings)
@@ -43,6 +47,8 @@ async def test_create_app_wires_sparse_encoder_service(monkeypatch):
     monkeypatch.setattr(main, "RerankerClient", lambda *args, **kwargs: object())
     monkeypatch.setattr(main, "LLMClient", lambda *args, **kwargs: object())
     monkeypatch.setattr(main, "WebSearchClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(main, "ASRClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(main, "TTSClient", lambda *args, **kwargs: object())
     monkeypatch.setattr(
         main,
         "SparseEncoderService",
@@ -57,6 +63,7 @@ async def test_create_app_wires_sparse_encoder_service(monkeypatch):
 
     monkeypatch.setattr(main, "build_rag_graph", fake_build_rag_graph)
     monkeypatch.setattr(main, "create_chat_router", lambda graph, llm: APIRouter())
+    monkeypatch.setattr(main, "create_audio_router", lambda asr, tts: APIRouter())
 
     app = main.create_app()
     async with app.router.lifespan_context(app):
@@ -64,3 +71,5 @@ async def test_create_app_wires_sparse_encoder_service(monkeypatch):
 
     services = captured["services"]
     assert services.sparse_encoder is sparse_encoder_instance
+    assert services.asr is not None
+    assert services.tts is not None
