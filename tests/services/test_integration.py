@@ -6,9 +6,9 @@
 #
 # URL defaults match the Docker Compose network hostnames and ports.
 # Override with env vars when running outside Docker:
-#   EMBEDDING_URL=http://localhost:8001 \
-#   RERANKER_URL=http://localhost:8002 \
-#   GUARD_URL=http://localhost:8003 \
+#   SERVICES__EMBEDDING_URL=http://localhost:8001 \
+#   SERVICES__RERANKER_URL=http://localhost:8002 \
+#   SERVICES__GUARD_URL=http://localhost:8003 \
 #   pytest tests/services/test_integration.py -v
 import os
 
@@ -16,9 +16,9 @@ import httpx
 import pytest
 
 
-EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://embedding:8001")
-RERANKER_URL = os.getenv("RERANKER_URL", "http://reranker:8002")
-GUARD_URL = os.getenv("GUARD_URL", "http://guard:8003")
+EMBEDDING_URL = os.getenv("SERVICES__EMBEDDING_URL", "http://embedding:8001")
+RERANKER_URL = os.getenv("SERVICES__RERANKER_URL", "http://reranker:8002")
+GUARD_URL = os.getenv("SERVICES__GUARD_URL", "http://guard:8003")
 
 
 @pytest.mark.asyncio

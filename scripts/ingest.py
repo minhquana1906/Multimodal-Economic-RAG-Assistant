@@ -56,10 +56,10 @@ logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="IN
 os.environ.setdefault("LANGSMITH_PROJECT", "multimodal-economic-rag-ingest")
 
 DATASET_NAME: str = "khoalnd/EconVNNews"
-EMBEDDING_URL: str = os.getenv("EMBEDDING_URL", "http://embedding:8001")
-QDRANT_URL: str = os.getenv("QDRANT_URL", "http://qdrant:6333")
-COLLECTION_NAME: str = "econ_vn_news"
-BATCH_SIZE: int = int(os.getenv("INGEST_BATCH_SIZE", "256"))
+EMBEDDING_URL: str = os.getenv("SERVICES__EMBEDDING_URL", "http://embedding:8001")
+QDRANT_URL: str = os.getenv("SERVICES__QDRANT_URL", "http://qdrant:6333")
+COLLECTION_NAME: str = os.getenv("SERVICES__QDRANT_COLLECTION", "econ_vn_news")
+BATCH_SIZE: int = int(os.getenv("INGEST__BATCH_SIZE", "256"))
 DENSE_DIM: int = 1024
 MAX_EMBED_RETRIES: int = 3
 EMBED_RETRY_DELAY: float = 5.0

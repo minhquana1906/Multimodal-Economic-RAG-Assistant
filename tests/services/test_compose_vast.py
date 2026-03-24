@@ -46,8 +46,12 @@ def test_vast_compose_pins_gpu_zero_and_gpu_one_service_groups():
     assert "--gpu-memory-utilization" in content
     assert "VLLM_LLM_GPU_MEMORY_UTILIZATION" in content
     assert "VLLM_VLM_GPU_MEMORY_UTILIZATION" in content
-    assert "Qwen/Qwen3-4B-Instruct" in content
-    assert "Qwen/Qwen3-VL-4B-Instruct" in content
+    assert "${LLM__MODEL}" in content
+    assert "${VLM_MODEL}" in content
+    assert "EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}" in content
+    assert "QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}" in content
+    assert "ASR_MODEL: ${SERVICES__ASR_MODEL}" in content
+    assert "TTS_MODEL: ${SERVICES__TTS_MODEL}" in content
 
 
 def test_makefile_contains_direct_vast_compose_targets():
