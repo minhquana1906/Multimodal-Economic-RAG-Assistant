@@ -9,21 +9,41 @@ from typing import Literal
 import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from loguru import logger
 from pydantic import BaseModel, model_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from loguru import logger
 
 logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
 MODEL_NAME = os.getenv("GUARD_MODEL", "Qwen/Qwen3Guard-Gen-0.6B")
+SAFETY_LABELS = {"safe": "Safe", "unsafe": "Unsafe", "controversial": "Controversial"}
+CATEGORY_NAMES = [
+    "Non-violent Illegal Acts",
+    "Sexual Content or Sexual Acts",
+    "Suicide & Self-Harm",
+    "Politically Sensitive Topics",
+    "Copyright Violation",
+    "Unethical Acts",
+    "Jailbreak",
+    "Violent",
+    "PII",
+    "None",
+]
+CATEGORY_PATTERN = re.compile(
+    rf"(?:Category:\s*)?({'|'.join(re.escape(name) for name in CATEGORY_NAMES)})",
+    re.IGNORECASE,
+)
 model = None
 tokenizer = None
+
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model, tokenizer
+    if AutoTokenizer is None or AutoModelForCausalLM is None:
+        raise RuntimeError("transformers is required to load the guard model")
     tokenizer = await asyncio.to_thread(AutoTokenizer.from_pretrained, MODEL_NAME)
     model = await asyncio.to_thread(
         AutoModelForCausalLM.from_pretrained,
@@ -51,7 +71,7 @@ async def health():
 class ClassifyRequest(BaseModel):
     text: str
     role: Literal["input", "output"]
-    prompt: str | None = None  # Required when role == "output"
+    prompt: str | None = None
 
     @model_validator(mode="after")
     def prompt_required_for_output(self) -> "ClassifyRequest":
@@ -61,19 +81,53 @@ class ClassifyRequest(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    label: str  # "safe" or "unsafe"
+    label: str
+    safe_label: str | None = None
+    categories: list[str] = []
+    refusal: str | None = None
+
+
+def extract_label_categories_refusal(content: str) -> tuple[str | None, list[str], str | None]:
+    safe_match = re.search(r"Safety:\s*(Safe|Unsafe|Controversial)", content, re.IGNORECASE)
+    refusal_match = re.search(r"Refusal:\s*(Yes|No)", content, re.IGNORECASE)
+
+    safe_label = None
+    if safe_match:
+        safe_label = SAFETY_LABELS[safe_match.group(1).lower()]
+
+    categories: list[str] = []
+    for match in CATEGORY_PATTERN.findall(content):
+        normalized = next(
+            (name for name in CATEGORY_NAMES if name.lower() == match.lower()),
+            match,
+        )
+        if normalized == "None" or normalized in categories:
+            continue
+        categories.append(normalized)
+
+    refusal = refusal_match.group(1).capitalize() if refusal_match else None
+    return safe_label, categories, refusal
 
 
 def parse_safety_label(output: str) -> str:
     """Parse 'Safety: Safe/Unsafe/Controversial' from model output."""
-    match = re.search(r"Safety:\s*(Safe|Unsafe|Controversial)", output, re.IGNORECASE)
-    if match:
-        label = match.group(1).lower()
-        return "safe" if label == "safe" else "unsafe"
-    return "unsafe"  # Fail closed: unparseable → unsafe
+    safe_label, _, _ = extract_label_categories_refusal(output)
+    if safe_label == "Safe":
+        return "safe"
+    return "unsafe"
 
 
-def _run_classify(text: str, role: str, prompt: str | None) -> str:
+def _build_classification_result(output_text: str) -> dict:
+    safe_label, categories, refusal = extract_label_categories_refusal(output_text)
+    return {
+        "label": "safe" if safe_label == "Safe" else "unsafe",
+        "safe_label": safe_label,
+        "categories": categories,
+        "refusal": refusal,
+    }
+
+
+def _run_classify(text: str, role: str, prompt: str | None) -> dict:
     """Blocking classify logic — run in thread via asyncio.to_thread."""
     if role == "input":
         messages = [{"role": "user", "content": text}]
@@ -91,14 +145,14 @@ def _run_classify(text: str, role: str, prompt: str | None) -> str:
         output_ids = model.generate(**inputs, max_new_tokens=128)
     new_tokens = output_ids[0][inputs["input_ids"].shape[-1] :]
     output_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-    return parse_safety_label(output_text)
+    return _build_classification_result(output_text)
 
 
 @app.post("/classify", response_model=ClassifyResponse)
 async def classify(request: ClassifyRequest):
     if model is None or tokenizer is None:
         return JSONResponse({"detail": "Model is still loading"}, status_code=503)
-    label = await asyncio.to_thread(
+    result = await asyncio.to_thread(
         _run_classify, request.text, request.role, request.prompt
     )
-    return ClassifyResponse(label=label)
+    return ClassifyResponse(**result)

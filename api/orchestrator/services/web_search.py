@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import httpx
 from langsmith import traceable
 from loguru import logger
@@ -9,6 +11,11 @@ class WebSearchClient:
     def __init__(self, api_key: str = "", timeout: float = 10.0):
         self.api_key = api_key
         self.timeout = timeout
+
+    def _source_from_url(self, url: str) -> str:
+        if not url:
+            return ""
+        return urlparse(url).netloc or url
 
     @traceable(name="Web Search Fallback", run_type="retriever")
     async def search(self, query: str, max_results: int = 5) -> list[dict]:
@@ -32,8 +39,10 @@ class WebSearchClient:
                 return [
                     {
                         "text": r.get("content", ""),
-                        "source": r.get("url", ""),
                         "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "source": self._source_from_url(r.get("url", "")),
+                        "score": r.get("score", 0.0),
                     }
                     for r in results
                 ]
