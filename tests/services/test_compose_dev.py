@@ -52,9 +52,8 @@ def test_dev_compose_uses_anchors_for_shared_dev_config():
     assert "<<: *gpu-reservation" in content
 
 
-def test_makefile_and_dev_wrapper_script_exist():
+def test_makefile_contains_direct_dev_compose_targets():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    script = (ROOT / "scripts" / "dev-compose.sh").read_text(encoding="utf-8")
 
     for target in [
         "dev-up:",
@@ -68,7 +67,7 @@ def test_makefile_and_dev_wrapper_script_exist():
     ]:
         assert target in makefile
 
-    assert "docker compose -f docker-compose.dev.yaml" in script
+    assert "docker compose -f docker-compose.dev.yaml" in makefile
 
 
 def test_gitignore_excludes_huggingface_cache_directory():
