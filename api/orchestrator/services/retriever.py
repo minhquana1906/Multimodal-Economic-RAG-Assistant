@@ -65,12 +65,9 @@ class RetrieverClient:
             ]
             logger.log(
                 "RETRIEVAL",
-                "top_k={} hits={} sparse={}",
-                top_k,
-                len(docs),
-                sparse_vector is not None,
+                f"top_k={top_k} hits={len(docs)} sparse={sparse_vector is not None}",
             )
             return docs
         except Exception as e:
-            logger.error("Retrieval error: {}", e)
+            logger.error(f"Retrieval error: {e}")
             return []

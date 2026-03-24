@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
         device_map="auto",
     )
     model.eval()
-    logger.info("Guard model loaded: {}", MODEL_NAME)
+    logger.info(f"Guard model loaded: {MODEL_NAME}")
     yield
     model = None
     tokenizer = None

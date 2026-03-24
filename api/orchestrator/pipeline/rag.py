@@ -114,15 +114,27 @@ def build_rag_graph(services, config):
             embeddings = await services.embedder.embed_query(state["query"])
             return {"embeddings": embeddings}
         except Exception as e:
-            logger.error("Embedding failed: {}", e)
+            logger.error(f"Embedding failed: {e}")
             return {"error": str(e)}
 
     @traceable(name="Document Retrieval")
     async def retrieve_node(state: RAGState) -> dict:
+        sparse_vector = None
+        retrieval_mode = "dense_only"
+        try:
+            sparse_vector = services.sparse_encoder.encode_query(state["query"])
+            retrieval_mode = "hybrid"
+        except Exception as e:
+            logger.warning(
+                f"Sparse encoding failed, falling back to dense-only retrieval: {e}"
+            )
+
         docs = await services.retriever.hybrid_search(
             dense_vector=state["embeddings"],
+            sparse_vector=sparse_vector,
             top_k=config.rag.retrieval_top_k,
         )
+        logger.log("RETRIEVAL", f"retrieval_mode={retrieval_mode}")
         return {"retrieved_docs": docs}
 
     @traceable(name="Document Reranking")

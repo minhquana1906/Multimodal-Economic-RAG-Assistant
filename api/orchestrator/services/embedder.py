@@ -23,7 +23,7 @@ class EmbedderClient:
                 response.raise_for_status()
                 return response.json()["embeddings"][0]
         except Exception as e:
-            logger.error("Embedding error: {}", e)
+            logger.error(f"Embedding error: {e}")
             raise
 
     @traceable(name="Embed Documents", run_type="chain")
@@ -39,5 +39,5 @@ class EmbedderClient:
                 response.raise_for_status()
                 return response.json()["embeddings"]
         except Exception as e:
-            logger.error("Embedding error: {}", e)
+            logger.error(f"Embedding error: {e}")
             raise

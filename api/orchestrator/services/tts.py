@@ -38,10 +38,7 @@ class TTSClient:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "RETRIEVAL",
-                    "TTS synthesize: chars={} speed={} latency={}ms",
-                    len(text),
-                    speed,
-                    latency_ms,
+                    f"TTS synthesize: chars={len(text)} speed={speed} latency={latency_ms}ms",
                 )
                 return audio_bytes
         except httpx.HTTPStatusError as e:
@@ -50,10 +47,10 @@ class TTSClient:
                 detail = e.response.json().get("detail", "")
             except Exception:
                 pass
-            logger.warning("TTS service error {}: {}", e.response.status_code, detail)
+            logger.warning(f"TTS service error {e.response.status_code}: {detail}")
             return None
         except Exception as e:
-            logger.warning("TTS service unreachable: {}", e)
+            logger.warning(f"TTS service unreachable: {e}")
             return None
 
     @traceable(name="TTS Unload", run_type="chain")
@@ -66,6 +63,6 @@ class TTSClient:
                     timeout=10.0,
                 )
                 response.raise_for_status()
-                logger.info("TTS model unloaded: {}", response.json())
+                logger.info(f"TTS model unloaded: {response.json()}")
         except Exception as e:
-            logger.warning("Failed to unload TTS model: {}", e)
+            logger.warning(f"Failed to unload TTS model: {e}")

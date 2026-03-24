@@ -16,6 +16,8 @@ def _make_services(
     input_guard_result=None,
     embed_vector=None,
     embed_raises=False,
+    sparse_vector=None,
+    sparse_encode_raises=False,
     retrieved_docs=None,
     reranked=None,
     web_results=None,
@@ -34,6 +36,12 @@ def _make_services(
         services.embedder.embed_query = AsyncMock(side_effect=Exception("embed down"))
     else:
         services.embedder.embed_query = AsyncMock(return_value=embed_vector or [0.1] * 1024)
+    if sparse_encode_raises:
+        services.sparse_encoder.encode_query = MagicMock(side_effect=Exception("sparse down"))
+    else:
+        services.sparse_encoder.encode_query = MagicMock(
+            return_value=sparse_vector or {"indices": [1, 2], "values": [0.3, 0.7]}
+        )
     services.retriever.hybrid_search = AsyncMock(return_value=retrieved_docs or [])
     services.reranker.rerank = AsyncMock(return_value=reranked or [])
     services.web_search.search = AsyncMock(return_value=web_results or [])
@@ -214,6 +222,54 @@ async def test_rag_pipeline_embed_failure():
     services.retriever.hybrid_search.assert_not_called()
     services.web_search.search.assert_not_called()
     services.llm.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_passes_sparse_vector_to_hybrid_search():
+    """Retrieval uses sparse query encoding and passes it to hybrid search."""
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    services = _make_services(
+        sparse_vector={"indices": [3, 9], "values": [0.2, 0.8]},
+        retrieved_docs=[],
+        reranked=[],
+        web_results=[],
+    )
+    config = _make_config(fallback_min_chunks=0)
+    graph = build_rag_graph(services, config)
+
+    await graph.ainvoke(_initial_state(query="lạm phát là gì?"))
+
+    services.sparse_encoder.encode_query.assert_called_once_with("lạm phát là gì?")
+    services.retriever.hybrid_search.assert_awaited_once_with(
+        dense_vector=[0.1] * 1024,
+        sparse_vector={"indices": [3, 9], "values": [0.2, 0.8]},
+        top_k=config.rag.retrieval_top_k,
+    )
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoding_fails():
+    """Sparse encoder failure should not break retrieval; dense-only fallback is used."""
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    services = _make_services(
+        sparse_encode_raises=True,
+        retrieved_docs=[],
+        reranked=[],
+        web_results=[],
+    )
+    config = _make_config(fallback_min_chunks=0)
+    graph = build_rag_graph(services, config)
+
+    await graph.ainvoke(_initial_state(query="CPI hôm nay"))
+
+    services.sparse_encoder.encode_query.assert_called_once_with("CPI hôm nay")
+    services.retriever.hybrid_search.assert_awaited_once_with(
+        dense_vector=[0.1] * 1024,
+        sparse_vector=None,
+        top_k=config.rag.retrieval_top_k,
+    )
 
 
 @pytest.mark.asyncio

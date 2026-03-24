@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     model.eval()
     token_true_id = tokenizer.convert_tokens_to_ids("yes")
     token_false_id = tokenizer.convert_tokens_to_ids("no")
-    logger.info("Reranker model loaded: {} | padding_side=left", MODEL_NAME)
+    logger.info(f"Reranker model loaded: {MODEL_NAME} | padding_side=left")
     yield
     model = None
     tokenizer = None
