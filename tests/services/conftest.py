@@ -1,5 +1,7 @@
 import sys
+import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 # Register both service paths so `import embedding_app` / `import reranker_app` /
 # `import guard_app` can find the right module when tests are run with
@@ -20,6 +22,14 @@ for _service in ("embedding", "reranker", "guard", "asr", "tts"):
     _svc_path = str(_root / "services" / _service)
     if _svc_path not in sys.path:
         sys.path.append(_svc_path)
+
+# Test env does not install transformers; provide a lightweight stub so service
+# modules can import normally and tests can patch the imported symbols.
+if "transformers" not in sys.modules:
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.AutoModelForCausalLM = MagicMock(name="AutoModelForCausalLM")
+    fake_transformers.AutoTokenizer = MagicMock(name="AutoTokenizer")
+    sys.modules["transformers"] = fake_transformers
 
 # Evict any already-cached service modules so the next import picks
 # up the correct one from whichever service path is first on sys.path.

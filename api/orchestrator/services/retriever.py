@@ -3,14 +3,8 @@ from __future__ import annotations
 from langsmith import traceable
 from loguru import logger
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import (
-    Prefetch,
-    FusionQuery,
-    Fusion,
-    SparseVector,
-)
+from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
 
-# Names must match the collection's vector config
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
@@ -33,11 +27,7 @@ class RetrieverClient:
                 results = await self.client.query_points(
                     collection_name=self.collection,
                     prefetch=[
-                        Prefetch(
-                            query=dense_vector,
-                            using=DENSE_VECTOR_NAME,
-                            limit=top_k,
-                        ),
+                        Prefetch(query=dense_vector, using=DENSE_VECTOR_NAME, limit=top_k),
                         Prefetch(
                             query=SparseVector(
                                 indices=sparse_vector["indices"],
@@ -68,6 +58,7 @@ class RetrieverClient:
                     "text": r.payload.get("text", ""),
                     "source": r.payload.get("source", ""),
                     "title": r.payload.get("title", ""),
+                    "url": r.payload.get("url", ""),
                     "score": r.score,
                 }
                 for r in points
