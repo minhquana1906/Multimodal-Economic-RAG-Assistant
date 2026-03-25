@@ -59,7 +59,6 @@ class TTSClient:
             logger.warning(f"TTS service unreachable: {e}")
             return None
 
-    @traceable(name="TTS Unload", run_type="chain")
     async def unload(self) -> None:
         """Request explicit model unload to free VRAM."""
         try:
