@@ -29,5 +29,7 @@ services/*/models/
 .cache/huggingface/
 
 .claude/
+.agents/
 CLAUDE.md
 .mcp.json
+skills-lock.json

@@ -1,7 +1,6 @@
 x-hf-cache-env: &hf-cache-env
   HF_HOME: /data/huggingface
   HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
-  TRANSFORMERS_CACHE: /data/huggingface/hub
 
 x-gpu-0: &gpu-0
   deploy:
@@ -261,7 +260,7 @@ services:
       start_period: 15s
 
   webui:
-    image: ghcr.io/open-webui/open-webui:v0.7.2
+    image: ghcr.io/open-webui/open-webui:v0.8.10
     hostname: webui
     pull_policy: always
     ports:
@@ -269,6 +268,15 @@ services:
     environment:
       OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      AUDIO_STT_ENGINE: ${AUDIO_STT_ENGINE:-openai}
+      AUDIO_STT_OPENAI_API_BASE_URL: ${AUDIO_STT_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+      AUDIO_STT_OPENAI_API_KEY: ${AUDIO_STT_OPENAI_API_KEY:-dummy}
+      AUDIO_STT_MODEL: ${AUDIO_STT_MODEL:-whisper-1}
+      AUDIO_TTS_ENGINE: ${AUDIO_TTS_ENGINE:-openai}
+      AUDIO_TTS_OPENAI_API_BASE_URL: ${AUDIO_TTS_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+      AUDIO_TTS_OPENAI_API_KEY: ${AUDIO_TTS_OPENAI_API_KEY:-dummy}
+      AUDIO_TTS_MODEL: ${AUDIO_TTS_MODEL:-tts-1}
+      AUDIO_TTS_VOICE: ${AUDIO_TTS_VOICE:-alloy}
       ENABLE_RAG_WEB_SEARCH: "false"
       ENABLE_IMAGE_GENERATION: "false"
       WEBUI_AUTH: "true"
@@ -285,7 +293,7 @@ services:
         condition: service_healthy
 
   tunnel:
-    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
+    image: cloudflare/cloudflared:2026.3.0
     hostname: tunnel
     pull_policy: always
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}

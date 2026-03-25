@@ -17,6 +17,10 @@ from loguru import logger
 class ASRError(Exception):
     """Raised when ASR transcription fails."""
 
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class ASRClient:
     def __init__(self, url: str, timeout: float):
@@ -55,11 +59,10 @@ class ASRClient:
                 detail = e.response.json().get("detail", "")
             except Exception:
                 pass
-            raise ASRError(f"ASR service error {e.response.status_code}: {detail}") from e
+            raise ASRError(detail or "ASR transcription failed", status_code=e.response.status_code) from e
         except Exception as e:
-            raise ASRError(f"ASR service unreachable: {e}") from e
+            raise ASRError(f"ASR service unreachable: {e}", status_code=502) from e
 
-    @traceable(name="ASR Unload", run_type="chain")
     async def unload(self) -> None:
         """Request explicit model unload to free VRAM before TTS."""
         try:

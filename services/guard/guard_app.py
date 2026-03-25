@@ -185,6 +185,7 @@ def _run_classify(text: str, role: str, prompt: str | None) -> dict:
             output_ids = model.generate(
                 **inputs,
                 max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False,
                 use_cache=False,
             )
         new_tokens = output_ids[0][inputs["input_ids"].shape[-1] :]

@@ -9,13 +9,16 @@ from loguru import logger
 from orchestrator.config import get_settings
 from orchestrator.tracing import setup_logging, setup_langsmith
 from orchestrator.pipeline.rag import build_rag_graph
+from orchestrator.routers.audio import create_audio_router
 from orchestrator.routers.chat import create_chat_router
+from orchestrator.services.asr import ASRClient
 from orchestrator.services.guard import GuardClient
 from orchestrator.services.embedder import EmbedderClient
 from orchestrator.services.retriever import RetrieverClient
 from orchestrator.services.reranker import RerankerClient
 from orchestrator.services.llm import LLMClient
 from orchestrator.services.sparse_encoder import SparseEncoderService
+from orchestrator.services.tts import TTSClient
 from orchestrator.services.web_search import WebSearchClient
 
 
@@ -46,6 +49,14 @@ def create_app() -> FastAPI:
                 settings.services.reranker_url,
                 settings.services.reranker_timeout,
             ),
+            asr=ASRClient(
+                settings.services.asr_url,
+                settings.services.asr_timeout,
+            ),
+            tts=TTSClient(
+                settings.services.tts_url,
+                settings.services.tts_timeout,
+            ),
             llm=LLMClient(
                 url=settings.llm.url,
                 model=settings.llm.model,
@@ -60,6 +71,7 @@ def create_app() -> FastAPI:
         )
         rag_graph = build_rag_graph(services, settings)
         app.include_router(create_chat_router(rag_graph, services.llm))
+        app.include_router(create_audio_router(services.asr, services.tts))
         logger.info("RAG graph ready")
         yield
         # graceful shutdown placeholder

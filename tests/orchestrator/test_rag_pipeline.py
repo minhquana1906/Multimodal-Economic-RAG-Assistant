@@ -91,6 +91,7 @@ def _initial_state(query="GDP Việt Nam?"):
         "conversation_summary": "",
         "conversation_context": "",
         "task_type": "chat",
+        "response_mode": "text",
         "input_safe": False,
         "embeddings": [],
         "retrieved_docs": [],
@@ -106,6 +107,22 @@ def _initial_state(query="GDP Việt Nam?"):
         "citation_pool": {},
         "error": None,
     }
+
+
+def _answer_with_footer(
+    body: str,
+    *,
+    title: str,
+    url: str,
+    source: str,
+    score: float,
+) -> str:
+    return (
+        f"{body}\n\n"
+        "----\n\n"
+        "### Nguồn trích dẫn\n"
+        f"- [{title}]({url}) - **{source} ({score:.4f})**"
+    )
 
 
 @pytest.mark.asyncio
@@ -134,7 +151,13 @@ async def test_rag_pipeline_passes_sparse_vector_into_hybrid_search():
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["answer"] == "GDP tăng 7% [GDP](https://example.com/gdp)"
+    assert result["answer"] == _answer_with_footer(
+        "GDP tăng 7%",
+        title="GDP",
+        url="https://example.com/gdp",
+        source="src.com",
+        score=0.9,
+    )
     services.sparse_encoder.encode_query.assert_called_once_with("GDP Việt Nam?")
     assert (
         services.retriever.hybrid_search.await_args.kwargs["sparse_vector"]
@@ -167,7 +190,13 @@ async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoder_errors(
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["answer"] == "GDP tăng 7% [GDP](https://example.com/gdp)"
+    assert result["answer"] == _answer_with_footer(
+        "GDP tăng 7%",
+        title="GDP",
+        url="https://example.com/gdp",
+        source="src.com",
+        score=0.9,
+    )
     services.sparse_encoder.encode_query.assert_called_once_with("GDP Việt Nam?")
     assert services.retriever.hybrid_search.await_args.kwargs["sparse_vector"] is None
 
@@ -206,7 +235,13 @@ async def test_rag_pipeline_uses_resolved_query_for_retrieval_and_guards():
         }
     )
 
-    assert result["answer"] == "GDP tăng 7% [Bonds](https://example.com/bonds)"
+    assert result["answer"] == _answer_with_footer(
+        "GDP tăng 7%",
+        title="Bonds",
+        url="https://example.com/bonds",
+        source="src.com",
+        score=0.9,
+    )
     services.guard.check_input.assert_awaited_once_with(resolved_query)
     services.embedder.embed_query.assert_awaited_once_with(resolved_query)
     services.reranker.rerank.assert_awaited_once()
@@ -251,10 +286,18 @@ async def test_rag_pipeline_generation_prompt_uses_conversation_context_and_raw_
         }
     )
 
-    assert result["answer"] == "Answer with context [Bonds](https://example.com/bonds)"
+    assert result["answer"] == _answer_with_footer(
+        "Answer with context",
+        title="Bonds",
+        url="https://example.com/bonds",
+        source="src.com",
+        score=0.9,
+    )
     prompt = services.llm.generate.await_args.kwargs["user_prompt"]
     assert conversation_context in prompt
     assert "Còn trái phiếu doanh nghiệp thì sao?" in prompt
+    assert "### Trả lời ngắn gọn" in prompt
+    assert "----" in prompt
 
 
 @pytest.mark.asyncio
@@ -383,10 +426,11 @@ async def test_generation_prompt_contains_context_ids_and_source_metadata():
     assert "hybrid:1" in prompt
     assert "https://example.com/gdp" in prompt
     assert "Source:" in prompt
+    assert "### Phân tích chính" in prompt
 
 
 @pytest.mark.asyncio
-async def test_rag_pipeline_renders_inline_markdown_citations_from_placeholders():
+async def test_rag_pipeline_text_mode_appends_structured_citation_footer():
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -409,12 +453,18 @@ async def test_rag_pipeline_renders_inline_markdown_citations_from_placeholders(
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["answer"] == "GDP tăng 7% [GDP](https://example.com/gdp)"
+    assert result["answer"] == _answer_with_footer(
+        "GDP tăng 7%",
+        title="GDP",
+        url="https://example.com/gdp",
+        source="src.com",
+        score=0.9,
+    )
     assert result["citations"][0]["context_id"] == "hybrid:1"
 
 
 @pytest.mark.asyncio
-async def test_rag_pipeline_repairs_missing_citations_once():
+async def test_rag_pipeline_text_mode_does_not_need_inline_citation_repair():
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -430,19 +480,25 @@ async def test_rag_pipeline_repairs_missing_citations_once():
     services = _make_services(
         retrieved_docs=retrieved,
         reranked=reranked,
-        llm_side_effect=["GDP tăng 7%", "GDP tăng 7% [[cite:hybrid:1]]"],
+        llm_side_effect=["GDP tăng 7%"],
     )
     config = _make_config(fallback_min_chunks=1)
     graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
-    assert services.llm.generate.await_count == 2
-    assert result["answer"] == "GDP tăng 7% [GDP](https://example.com/gdp)"
+    assert services.llm.generate.await_count == 1
+    assert result["answer"] == _answer_with_footer(
+        "GDP tăng 7%",
+        title="GDP",
+        url="https://example.com/gdp",
+        source="src.com",
+        score=0.9,
+    )
 
 
 @pytest.mark.asyncio
-async def test_rag_pipeline_renders_web_citations_from_placeholders():
+async def test_rag_pipeline_text_mode_appends_web_citation_footer():
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -484,8 +540,45 @@ async def test_rag_pipeline_renders_web_citations_from_placeholders():
 
     result = await graph.ainvoke(_initial_state())
 
-    assert "[Web](https://web.com/article)" in result["answer"]
+    assert result["answer"].startswith("Fed giữ nguyên lãi suất")
+    assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
+    assert "- [Web](https://web.com/article) - **web.com (0.9200)**" in result["answer"]
+    assert len(result["citations"]) == 2
     assert result["citations"][0]["source_type"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_audio_mode_uses_spoken_prompt_and_skips_footer():
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [{
+        "id": "1",
+        "text": "GDP text",
+        "source": "src.com",
+        "title": "GDP",
+        "url": "https://example.com/gdp",
+        "score": 0.7,
+    }]
+    reranked = [{"index": 0, "score": 0.9}]
+
+    services = _make_services(
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        llm_side_effect=["Giá đang tăng, nhưng tăng chậm lại."],
+    )
+    config = _make_config(fallback_min_chunks=1)
+    graph = build_rag_graph(services, config)
+
+    result = await graph.ainvoke(
+        _initial_state() | {"response_mode": "audio"}
+    )
+
+    prompt = services.llm.generate.await_args.kwargs["user_prompt"]
+    assert "một đoạn ngắn" in prompt
+    assert "văn nói tự nhiên" in prompt
+    assert "### Trả lời ngắn gọn" not in prompt
+    assert result["answer"] == "Giá đang tăng, nhưng tăng chậm lại."
+    assert result["citations"][0]["context_id"] == "hybrid:1"
 
 
 @pytest.mark.asyncio
@@ -514,7 +607,13 @@ async def test_rag_pipeline_happy_path():
     result = await graph.ainvoke(_initial_state())
 
     assert result["input_safe"] is True
-    assert result["answer"] == "GDP tăng 7% [GDP](https://example.com/gdp)"
+    assert result["answer"] == _answer_with_footer(
+        "GDP tăng 7%",
+        title="GDP",
+        url="https://example.com/gdp",
+        source="src.com",
+        score=0.9,
+    )
     assert result["output_safe"] is True
     assert len(result["citations"]) == 1
     assert result["citations"][0]["title"] == "GDP"
@@ -596,7 +695,9 @@ async def test_rag_pipeline_web_fallback_triggered():
 
     services.web_search.search.assert_called_once()
     assert any(c["source"] == "web.com" for c in result["final_context"])
-    assert result["answer"] == "Answer with web [Web](https://web.com/article)"
+    assert result["answer"].startswith("Answer with web")
+    assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
+    assert "- [Web](https://web.com/article) - **web.com (0.4200)**" in result["answer"]
 
 
 @pytest.mark.asyncio
@@ -695,7 +796,13 @@ async def test_rag_pipeline_unsafe_output_regenerates_once():
     result = await graph.ainvoke(_initial_state())
 
     assert result["output_safe"] is True
-    assert result["answer"] == "Safe regenerated text [T](https://example.com/t)"
+    assert result["answer"] == _answer_with_footer(
+        "Safe regenerated text",
+        title="T",
+        url="https://example.com/t",
+        source="s",
+        score=0.9,
+    )
     assert services.llm.generate.await_count == 2
     assert len(result["citations"]) == 1
     retry_prompt = services.llm.generate.await_args_list[1].kwargs["user_prompt"]

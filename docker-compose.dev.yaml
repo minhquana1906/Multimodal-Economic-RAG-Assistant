@@ -1,7 +1,6 @@
 x-hf-cache-env: &hf-cache-env
   HF_HOME: /data/huggingface
   HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
-  TRANSFORMERS_CACHE: /data/huggingface/hub
 
 x-hf-cache-volume: &hf-cache-volume ./.cache/huggingface:/data/huggingface
 
@@ -21,6 +20,7 @@ networks:
 volumes:
   qdrant_storage:
   open-webui:
+  ollama_data:
 
 services:
   qdrant:
@@ -168,13 +168,22 @@ services:
       start_period: 15s
 
   webui:
-    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.7.2}
+    image: ghcr.io/open-webui/open-webui:v0.8.10
     hostname: webui
     ports:
       - "8080:8080"
     environment:
       OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      AUDIO_STT_ENGINE: ${AUDIO_STT_ENGINE:-openai}
+      AUDIO_STT_OPENAI_API_BASE_URL: ${AUDIO_STT_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+      AUDIO_STT_OPENAI_API_KEY: ${AUDIO_STT_OPENAI_API_KEY:-dummy}
+      AUDIO_STT_MODEL: ${AUDIO_STT_MODEL:-whisper-1}
+      AUDIO_TTS_ENGINE: ${AUDIO_TTS_ENGINE:-openai}
+      AUDIO_TTS_OPENAI_API_BASE_URL: ${AUDIO_TTS_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+      AUDIO_TTS_OPENAI_API_KEY: ${AUDIO_TTS_OPENAI_API_KEY:-dummy}
+      AUDIO_TTS_MODEL: ${AUDIO_TTS_MODEL:-tts-1}
+      AUDIO_TTS_VOICE: ${AUDIO_TTS_VOICE:-alloy}
       ENABLE_RAG_WEB_SEARCH: "false"
       ENABLE_IMAGE_GENERATION: "false"
       WEBUI_AUTH: "true"
@@ -182,6 +191,9 @@ services:
       ENABLE_LOGIN_FORM: "true"
       DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
     volumes:
       - open-webui:/app/backend/data
     networks:
@@ -191,7 +203,7 @@ services:
         condition: service_healthy
 
   tunnel:
-    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
+    image: cloudflare/cloudflared:2026.3.0
     hostname: tunnel
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
@@ -251,8 +263,8 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 6
+      start_period: 30s
     profiles:
       - audio
 
@@ -285,7 +297,25 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 6
+      start_period: 30s
     profiles:
       - audio
+
+  ollama:
+    <<: *gpu-reservation
+    image: ollama/ollama:latest
+    hostname: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - rag-net
+    command: ["serve"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

@@ -31,7 +31,8 @@ logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
 # ── Configuration ──────────────────────────────────────────────────────
-TTS_MODEL = os.getenv("TTS_MODEL", "pnnbao-ump/VieNeu-TTS")
+TTS_MODEL = os.getenv("TTS_MODEL", "pnnbao-ump/VieNeu-TTS-0.3B-q4-gguf")
+TTS_CODEC = os.getenv("TTS_CODEC", "neuphonic/distill-neucodec")
 IDLE_TIMEOUT_S = int(os.getenv("TTS_IDLE_TIMEOUT", "300"))
 SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
 DEFAULT_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
@@ -77,6 +78,7 @@ class OnDemandModel:
 
         return Vieneu(
             backbone_repo=TTS_MODEL,
+            codec_repo=TTS_CODEC,
             backbone_device="cuda:0",
             codec_device="cuda:0",
         )
@@ -158,6 +160,31 @@ class SynthesizeRequest(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
+def _ensure_numpy(audio) -> np.ndarray:
+    """Convert model output to a 1-D float32 numpy array.
+
+    VieNeu may return a raw ndarray, a torch.Tensor, a (audio, sr) tuple, or
+    a dict with an ``audio`` key.  This normalises all variants.
+    """
+    # Unwrap tuple / dict
+    if isinstance(audio, tuple):
+        audio = audio[0]
+    if isinstance(audio, dict):
+        audio = audio.get("audio", audio.get("wav", audio.get("waveform")))
+
+    # Torch tensor → numpy
+    if isinstance(audio, torch.Tensor):
+        audio = audio.detach().cpu().float().numpy()
+
+    audio = np.asarray(audio, dtype=np.float32)
+
+    # Squeeze to 1-D (handles shapes like (1, N) or (1, 1, N))
+    audio = audio.squeeze()
+    if audio.ndim == 0:
+        return np.array([], dtype=np.float32)
+    return audio
+
+
 def _audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> bytes:
     """Convert a float32 numpy waveform to WAV bytes in memory."""
     buf = io.BytesIO()
@@ -174,11 +201,15 @@ def _resample_if_needed(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.n
         import torchaudio
 
         waveform = torch.from_numpy(audio).unsqueeze(0)
-        resampler = torchaudio.transforms.Resample(orig_freq=orig_sr, new_freq=target_sr)
+        resampler = torchaudio.transforms.Resample(
+            orig_freq=orig_sr, new_freq=target_sr
+        )
         resampled = resampler(waveform)
         return resampled.squeeze(0).numpy()
     except ImportError:
-        logger.warning("torchaudio not available for resampling, returning native sample rate")
+        logger.warning(
+            "torchaudio not available for resampling, returning native sample rate"
+        )
         return audio
 
 
@@ -202,7 +233,9 @@ async def synthesize(req: SynthesizeRequest):
     # Preprocess text into sentences
     sentences = preprocess(req.text)
     if not sentences:
-        return JSONResponse({"detail": "No speakable text after preprocessing"}, status_code=400)
+        return JSONResponse(
+            {"detail": "No speakable text after preprocessing"}, status_code=400
+        )
 
     logger.info(
         f"Synthesizing {len(sentences)} sentence(s), speed={req.speed}, sample_rate={req.sample_rate}"
@@ -219,10 +252,20 @@ async def synthesize(req: SynthesizeRequest):
 
     for i, sentence in enumerate(sentences):
         try:
-            chunk = await asyncio.to_thread(
+            raw_chunk = await asyncio.to_thread(
                 tts.infer,
                 text=sentence,
                 temperature=req.speed,
+            )
+            chunk = _ensure_numpy(raw_chunk)
+            if chunk.size == 0:
+                logger.warning(
+                    f"TTS returned empty audio for sentence {i}: '{sentence[:60]}'"
+                )
+                continue
+            logger.debug(
+                f"TTS chunk {i}: type={type(raw_chunk).__name__} shape={chunk.shape} "
+                f"min={chunk.min():.4f} max={chunk.max():.4f}"
             )
             audio_chunks.append(chunk)
         except Exception as e:
@@ -268,7 +311,9 @@ async def stream(req: SynthesizeRequest):
 
     sentences = preprocess(req.text)
     if not sentences:
-        return JSONResponse({"detail": "No speakable text after preprocessing"}, status_code=400)
+        return JSONResponse(
+            {"detail": "No speakable text after preprocessing"}, status_code=400
+        )
 
     logger.info(
         f"Streaming {len(sentences)} sentence(s), speed={req.speed}, sample_rate={req.sample_rate}"
@@ -281,11 +326,15 @@ async def stream(req: SynthesizeRequest):
 
         for i, sentence in enumerate(sentences):
             try:
-                chunk = await asyncio.to_thread(
+                raw_chunk = await asyncio.to_thread(
                     tts.infer,
                     text=sentence,
                     temperature=req.speed,
                 )
+                chunk = _ensure_numpy(raw_chunk)
+                if chunk.size == 0:
+                    logger.warning(f"TTS stream: empty audio for sentence {i}")
+                    continue
                 chunk = _resample_if_needed(chunk, SAMPLE_RATE, output_sr)
                 wav_bytes = _audio_to_wav_bytes(chunk, output_sr)
                 b64_audio = base64.b64encode(wav_bytes).decode("ascii")

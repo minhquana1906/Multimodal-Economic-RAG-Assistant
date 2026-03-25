@@ -16,6 +16,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --break-system-packages \
     torch==2.10.0+cu128 torchaudio==2.10.0+cu128 --index-url https://download.pytorch.org/whl/cu128 \
+    torchcodec==0.10.0 --index-url https://download.pytorch.org/whl/cu128 \
     && pip install --break-system-packages -r requirements.txt
 
 COPY asr_app.py .
