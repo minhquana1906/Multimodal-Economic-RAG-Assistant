@@ -40,6 +40,7 @@ def _build_initial_state(
     conversation_summary: str,
     conversation_context: str,
     task_type: str,
+    response_mode: str,
 ) -> RAGState:
     return {
         "query": raw_query,
@@ -48,6 +49,7 @@ def _build_initial_state(
         "conversation_summary": conversation_summary,
         "conversation_context": conversation_context,
         "task_type": task_type,
+        "response_mode": response_mode,
         "input_safe": False,
         "embeddings": [],
         "retrieved_docs": [],
@@ -106,6 +108,7 @@ async def _run_request(
     task_llm: Any | None,
     messages,
     max_tokens: int | None,
+    response_mode: str = "text",
 ) -> dict:
     conversation = _prepare_conversation(messages, max_tokens)
     if task_llm is not None and conversation["task_type"] != "chat":
@@ -128,6 +131,7 @@ async def _run_request(
             conversation_summary=conversation["conversation_summary"],
             conversation_context=conversation["conversation_context"],
             task_type=conversation["task_type"],
+            response_mode=response_mode,
         )
     )
     return {
@@ -143,23 +147,21 @@ async def execute_chat_turn(
     task_llm: Any | None,
     messages,
     max_tokens: int | None,
+    response_mode: str = "text",
 ) -> dict:
-    result = await _run_request(rag_graph, task_llm, messages, max_tokens)
+    result = await _run_request(
+        rag_graph,
+        task_llm,
+        messages,
+        max_tokens,
+        response_mode=response_mode,
+    )
     return {
         "answer": result.get("answer", ""),
         "citations": result.get("citations", []),
         "task_type": result.get("task_type", "chat"),
         "resolved_query": result.get("resolved_query", ""),
     }
-
-
-def _format_citation(citation: dict) -> str:
-    title = citation.get("title", "") or "Nguồn tham khảo"
-    url = citation.get("url", "") or ""
-    source = citation.get("source", "") or url or "unknown"
-    score = float(citation.get("score", 0.0) or 0.0)
-    title_part = f"[{title}]({url})" if url else title
-    return f"- {title_part} - **{source} ({score:.4f})**"
 
 
 def _chunk_answer(answer: str, chunk_size: int = 64) -> list[str]:
@@ -185,6 +187,7 @@ def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
                 task_llm,
                 request.messages,
                 request.max_tokens,
+                request.response_mode,
             )
 
             answer: str = result.get("answer", "")

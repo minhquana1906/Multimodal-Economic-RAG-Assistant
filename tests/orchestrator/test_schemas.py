@@ -10,6 +10,7 @@ def test_schemas_validate():
     assert len(req.messages) == 1
     assert req.messages[0].role == "user"
     assert req.temperature == 0.7
+    assert req.response_mode == "text"
     assert req.stream is False
 
 
@@ -39,6 +40,18 @@ def test_chat_request_temperature_bounds():
     ChatRequest(model="m", messages=msgs, temperature=2.0)
     with pytest.raises(ValidationError):
         ChatRequest(model="m", messages=msgs, temperature=3.0)
+
+
+def test_chat_request_response_mode_validation():
+    from orchestrator.models.schemas import ChatRequest, Message
+    from pydantic import ValidationError
+
+    msgs = [Message(role="user", content="hi")]
+    req = ChatRequest(model="m", messages=msgs, response_mode="audio")
+    assert req.response_mode == "audio"
+
+    with pytest.raises(ValidationError):
+        ChatRequest(model="m", messages=msgs, response_mode="voice")
 
 
 def test_chat_request_empty_messages_invalid():
