@@ -63,7 +63,6 @@ class ASRClient:
         except Exception as e:
             raise ASRError(f"ASR service unreachable: {e}", status_code=502) from e
 
-    @traceable(name="ASR Unload", run_type="chain")
     async def unload(self) -> None:
         """Request explicit model unload to free VRAM before TTS."""
         try:

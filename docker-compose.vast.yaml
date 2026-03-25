@@ -1,7 +1,6 @@
 x-hf-cache-env: &hf-cache-env
   HF_HOME: /data/huggingface
   HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
-  TRANSFORMERS_CACHE: /data/huggingface/hub
 
 x-gpu-0: &gpu-0
   deploy:

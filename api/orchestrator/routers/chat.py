@@ -103,6 +103,18 @@ def _prepare_conversation(messages, max_tokens: int | None) -> dict:
     }
 
 
+def _resolve_response_mode(request: ChatRequest) -> str:
+    if "response_mode" in request.model_fields_set:
+        return request.response_mode
+
+    if request.audio or any(
+        modality.lower() == "audio" for modality in (request.modalities or [])
+    ):
+        return "audio"
+
+    return request.response_mode
+
+
 async def _run_request(
     rag_graph: Any,
     task_llm: Any | None,
@@ -181,13 +193,22 @@ def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
             raise HTTPException(status_code=400, detail="No user message found")
 
         request_id = str(uuid.uuid4())[:8]
+        effective_response_mode = _resolve_response_mode(request)
         with logger.contextualize(request_id=request_id):
+            logger.info(
+                "chat request: requested_response_mode={} effective_response_mode={} "
+                "modalities={} has_audio={}",
+                request.response_mode,
+                effective_response_mode,
+                request.modalities or [],
+                bool(request.audio),
+            )
             result = await execute_chat_turn(
                 rag_graph,
                 task_llm,
                 request.messages,
                 request.max_tokens,
-                request.response_mode,
+                effective_response_mode,
             )
 
             answer: str = result.get("answer", "")

@@ -4,7 +4,6 @@ import re
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
-from langsmith import traceable
 from loguru import logger
 
 
@@ -228,7 +227,6 @@ def _build_retry_prompt(state: RAGState, guard_result: dict) -> str:
 def build_rag_graph(services, config):
     """Build and compile the LangGraph RAG workflow."""
 
-    @traceable(name="Input Guard Check")
     async def input_guard_node(state: RAGState) -> dict:
         guard_result = await services.guard.check_input(_resolved_query(state))
         if guard_result["label"] != "safe":
@@ -242,7 +240,6 @@ def build_rag_graph(services, config):
             }
         return {"input_safe": True, "input_guard_result": guard_result}
 
-    @traceable(name="Query Embedding")
     async def embed_node(state: RAGState) -> dict:
         try:
             embeddings = await services.embedder.embed_query(_resolved_query(state))
@@ -251,7 +248,6 @@ def build_rag_graph(services, config):
             logger.error(f"Embedding failed: {e}")
             return {"error": str(e)}
 
-    @traceable(name="Document Retrieval")
     async def retrieve_node(state: RAGState) -> dict:
         sparse_vector = None
         retrieval_mode = "dense_only"
@@ -271,7 +267,6 @@ def build_rag_graph(services, config):
         logger.log("RETRIEVAL", f"retrieval_mode={retrieval_mode}")
         return {"retrieved_docs": docs}
 
-    @traceable(name="Document Reranking")
     async def rerank_node(state: RAGState) -> dict:
         if not state["retrieved_docs"]:
             return {"reranked_docs": []}
@@ -284,7 +279,6 @@ def build_rag_graph(services, config):
         )
         return {"reranked_docs": ranked}
 
-    @traceable(name="Web Search Fallback")
     async def web_fallback_node(state: RAGState) -> dict:
         needs_fallback = len(
             state["reranked_docs"]
@@ -297,7 +291,6 @@ def build_rag_graph(services, config):
             return {"web_results": web_results}
         return {"web_results": []}
 
-    @traceable(name="Combine Context")
     async def combine_context_node(state: RAGState) -> dict:
         reranked = []
         for rank, ranked_doc in enumerate(state["reranked_docs"]):
@@ -331,7 +324,6 @@ def build_rag_graph(services, config):
         }
         return {"final_context": final_context, "citation_pool": citation_pool}
 
-    @traceable(name="LLM Generation")
     async def generate_node(state: RAGState) -> dict:
         if not state["final_context"]:
             return {
@@ -346,7 +338,6 @@ def build_rag_graph(services, config):
         )
         return {"answer": answer, "generation_prompt": user_prompt}
 
-    @traceable(name="Output Safety Check")
     async def output_guard_node(state: RAGState) -> dict:
         guard_result = await services.guard.check_output(
             text=state["answer"],
@@ -382,7 +373,6 @@ def build_rag_graph(services, config):
             ),
         }
 
-    @traceable(name="Build Citations")
     async def citations_node(state: RAGState) -> dict:
         citation_pool = state.get("citation_pool", {})
         candidates = sorted(
