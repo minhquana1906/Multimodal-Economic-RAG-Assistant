@@ -4,7 +4,6 @@ import re
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
-from langsmith import traceable
 from loguru import logger
 
 
@@ -21,6 +20,27 @@ CATEGORY_REASON_MAP = {
 }
 DEFAULT_GUARD_REASON = "nội dung vi phạm chính sách an toàn"
 _CITATION_PATTERN = re.compile(r"\[\[cite:([a-zA-Z0-9:_-]+)\]\]")
+TEXT_RESPONSE_INSTRUCTIONS = """
+Yêu cầu định dạng câu trả lời:
+- Trả lời bằng tiếng Việt.
+- Dùng đúng các section sau với header level 3:
+### Trả lời ngắn gọn
+### Phân tích chính
+- Ngăn cách các section bằng dòng ----
+- Ưu tiên bullet point ngắn gọn, mỗi bullet một ý.
+- Trả lời trực tiếp vào trọng tâm câu hỏi, không lan man.
+- Không thêm section rỗng.
+- Không dùng header level khác.
+- Không tự thêm mục kết luận dài dòng nếu không cần thiết.
+""".strip()
+AUDIO_RESPONSE_INSTRUCTIONS = """
+Yêu cầu định dạng câu trả lời:
+- Trả lời bằng tiếng Việt trong một đoạn ngắn.
+- Dùng văn nói tự nhiên, ngắn gọn, trực tiếp vào ý chính.
+- Chỉ nên dài 1-3 câu ngắn.
+- Không dùng markdown, bullet point, header, hay danh sách.
+- Không mở đầu vòng vo, không kết thúc bằng câu mời gọi kéo dài hội thoại.
+""".strip()
 
 
 class RAGState(TypedDict):
@@ -32,6 +52,7 @@ class RAGState(TypedDict):
     conversation_summary: str
     conversation_context: str
     task_type: str
+    response_mode: Literal["text", "audio"]
     input_safe: bool
     embeddings: list[float]
     retrieved_docs: list[dict]
@@ -54,6 +75,11 @@ def _raw_query(state: RAGState) -> str:
 
 def _resolved_query(state: RAGState) -> str:
     return state.get("resolved_query") or _raw_query(state)
+
+
+def _response_mode(state: RAGState) -> Literal["text", "audio"]:
+    mode = state.get("response_mode")
+    return "audio" if mode == "audio" else "text"
 
 
 def _primary_guard_reason(categories: list[str]) -> str:
@@ -118,7 +144,10 @@ def _build_context_item(
 
 
 def _citation_sort_key(item: dict) -> tuple[float, int]:
-    return (float(item.get("score", 0.0) or 0.0), -int(item.get("original_rank", 0) or 0))
+    return (
+        float(item.get("score", 0.0) or 0.0),
+        -int(item.get("original_rank", 0) or 0),
+    )
 
 
 def _extract_citation_ids(answer: str) -> list[str]:
@@ -134,53 +163,25 @@ def _render_citation_reference(item: dict) -> str:
     return f"{title} ({source})"
 
 
-def _render_answer_citations(answer: str, citation_pool: dict[str, dict]) -> tuple[str, list[dict]]:
-    ordered_citations: list[dict] = []
-    seen_context_ids: set[str] = set()
+def _format_citation_line(item: dict) -> str:
+    """Format a single citation as a bullet point for the footer block.
 
-    def replace(match: re.Match[str]) -> str:
-        context_id = match.group(1)
-        item = citation_pool.get(context_id)
-        if item is None:
-            return ""
-        if context_id not in seen_context_ids:
-            seen_context_ids.add(context_id)
-            ordered_citations.append(_normalize_citation(item))
-        return _render_citation_reference(item)
-
-    rendered = _CITATION_PATTERN.sub(replace, answer)
-    rendered = re.sub(r"[ ]{2,}", " ", rendered).strip()
-    return rendered, ordered_citations
-
-
-def _build_citation_repair_prompt(
-    answer: str,
-    citation_pool: dict[str, dict],
-    citation_limit: int,
-) -> str:
-    top_candidates = sorted(
-        citation_pool.values(),
-        key=_citation_sort_key,
-        reverse=True,
-    )[:citation_limit]
-    candidate_lines = "\n".join(
-        [
-            (
-                f"- {item['context_id']}: title={item.get('title', '')}; "
-                f"source={item.get('source', '')}; url={item.get('url', '')}"
-            )
-            for item in top_candidates
-        ]
-    )
-    return (
-        "Giữ nguyên nội dung câu trả lời sau và chỉ chèn placeholder trích dẫn inline "
-        "ngay sau các claim dạng [[cite:context_id]]. Không đổi wording ngoài việc thêm placeholder.\n\n"
-        f"Các context_id hợp lệ:\n{candidate_lines}\n\n"
-        f"Câu trả lời hiện tại:\n{answer}"
-    )
+    Format: ``- [title](url) - **source (score)**``
+    """
+    title = item.get("title", "") or "Nguồn tham khảo"
+    url = item.get("url", "") or ""
+    source = item.get("source", "") or url or "unknown"
+    score = float(item.get("score", 0.0) or 0.0)
+    title_part = f"[{title}]({url})" if url else title
+    return f"- {title_part} - **{source} ({score:.4f})**"
 
 
 def _build_generation_prompt(state: RAGState, config) -> str:
+    response_instructions = (
+        AUDIO_RESPONSE_INSTRUCTIONS
+        if _response_mode(state) == "audio"
+        else TEXT_RESPONSE_INSTRUCTIONS
+    )
     retrieved_context = "\n\n".join(
         [
             (
@@ -196,10 +197,8 @@ def _build_generation_prompt(state: RAGState, config) -> str:
     context_sections = []
     if state.get("conversation_context"):
         context_sections.append(state["conversation_context"])
-    context_sections.append(
-        "Quy tắc trích dẫn: khi dùng nguồn, chèn placeholder inline ngay sau claim theo dạng [[cite:context_id]]. "
-        "Chỉ dùng context_id có trong ngữ cảnh. Không dùng [1] hoặc danh sách nguồn cuối câu trả lời."
-    )
+    context_sections.append(response_instructions)
+    context_sections.append("Hãy trả lời dựa trên các nguồn được cung cấp.")
     if retrieved_context:
         context_sections.append(retrieved_context)
 
@@ -228,7 +227,6 @@ def _build_retry_prompt(state: RAGState, guard_result: dict) -> str:
 def build_rag_graph(services, config):
     """Build and compile the LangGraph RAG workflow."""
 
-    @traceable(name="Input Guard Check")
     async def input_guard_node(state: RAGState) -> dict:
         guard_result = await services.guard.check_input(_resolved_query(state))
         if guard_result["label"] != "safe":
@@ -242,7 +240,6 @@ def build_rag_graph(services, config):
             }
         return {"input_safe": True, "input_guard_result": guard_result}
 
-    @traceable(name="Query Embedding")
     async def embed_node(state: RAGState) -> dict:
         try:
             embeddings = await services.embedder.embed_query(_resolved_query(state))
@@ -251,7 +248,6 @@ def build_rag_graph(services, config):
             logger.error(f"Embedding failed: {e}")
             return {"error": str(e)}
 
-    @traceable(name="Document Retrieval")
     async def retrieve_node(state: RAGState) -> dict:
         sparse_vector = None
         retrieval_mode = "dense_only"
@@ -271,7 +267,6 @@ def build_rag_graph(services, config):
         logger.log("RETRIEVAL", f"retrieval_mode={retrieval_mode}")
         return {"retrieved_docs": docs}
 
-    @traceable(name="Document Reranking")
     async def rerank_node(state: RAGState) -> dict:
         if not state["retrieved_docs"]:
             return {"reranked_docs": []}
@@ -284,21 +279,18 @@ def build_rag_graph(services, config):
         )
         return {"reranked_docs": ranked}
 
-    @traceable(name="Web Search Fallback")
     async def web_fallback_node(state: RAGState) -> dict:
-        needs_fallback = (
-            len(state["reranked_docs"]) < config.rag.fallback_min_chunks
-            or (
-                state["reranked_docs"]
-                and state["reranked_docs"][0]["score"] < config.rag.fallback_score_threshold
-            )
+        needs_fallback = len(
+            state["reranked_docs"]
+        ) < config.rag.fallback_min_chunks or (
+            state["reranked_docs"]
+            and state["reranked_docs"][0]["score"] < config.rag.fallback_score_threshold
         )
         if needs_fallback:
             web_results = await services.web_search.search(_resolved_query(state))
             return {"web_results": web_results}
         return {"web_results": []}
 
-    @traceable(name="Combine Context")
     async def combine_context_node(state: RAGState) -> dict:
         reranked = []
         for rank, ranked_doc in enumerate(state["reranked_docs"]):
@@ -328,16 +320,16 @@ def build_rag_graph(services, config):
             )
         final_context = reranked + web_context
         citation_pool = {
-            item["context_id"]: item
-            for item in final_context
-            if item.get("context_id")
+            item["context_id"]: item for item in final_context if item.get("context_id")
         }
         return {"final_context": final_context, "citation_pool": citation_pool}
 
-    @traceable(name="LLM Generation")
     async def generate_node(state: RAGState) -> dict:
         if not state["final_context"]:
-            return {"answer": config.prompts.no_context_message, "generation_prompt": ""}
+            return {
+                "answer": config.prompts.no_context_message,
+                "generation_prompt": "",
+            }
 
         user_prompt = _build_generation_prompt(state, config)
         answer = await services.llm.generate(
@@ -346,7 +338,6 @@ def build_rag_graph(services, config):
         )
         return {"answer": answer, "generation_prompt": user_prompt}
 
-    @traceable(name="Output Safety Check")
     async def output_guard_node(state: RAGState) -> dict:
         guard_result = await services.guard.check_output(
             text=state["answer"],
@@ -382,56 +373,28 @@ def build_rag_graph(services, config):
             ),
         }
 
-    @traceable(name="Build Citations")
     async def citations_node(state: RAGState) -> dict:
         citation_pool = state.get("citation_pool", {})
         candidates = sorted(
             citation_pool.values(),
             key=_citation_sort_key,
             reverse=True,
-        )
-        valid_citation_ids = [
-            context_id
-            for context_id in _extract_citation_ids(state["answer"])
-            if context_id in citation_pool
-        ]
-        answer = state["answer"]
+        )[: config.rag.citation_limit]
 
-        if not valid_citation_ids and citation_pool:
-            repair_prompt = _build_citation_repair_prompt(
-                state["answer"],
-                citation_pool,
-                config.rag.citation_limit,
+        citations = [_normalize_citation(item) for item in candidates]
+        answer = state["answer"].rstrip()
+
+        # Strip any leftover inline citation placeholders the LLM may have generated
+        answer = _CITATION_PATTERN.sub("", answer)
+        answer = re.sub(r"[ ]{2,}", " ", answer).strip()
+
+        # Append citation footer
+        if citations and _response_mode(state) == "text":
+            citation_lines = "\n".join(
+                _format_citation_line(item) for item in candidates
             )
-            try:
-                repaired_answer = await services.llm.generate(
-                    system_prompt=config.prompts.system_prompt,
-                    user_prompt=repair_prompt,
-                )
-            except Exception as e:
-                logger.warning("Citation repair failed before placeholder rendering: {}", e)
-            else:
-                repaired_ids = [
-                    context_id
-                    for context_id in _extract_citation_ids(repaired_answer)
-                    if context_id in citation_pool
-                ]
-                if repaired_ids:
-                    answer = repaired_answer
-                    valid_citation_ids = repaired_ids
+            answer = f"{answer}\n\n----\n\n### Nguồn trích dẫn\n{citation_lines}"
 
-        if not valid_citation_ids:
-            fallback_items = candidates[: config.rag.citation_limit]
-            citations = [_normalize_citation(item) for item in fallback_items]
-            if fallback_items:
-                logger.warning("Citation repair failed; using deterministic fallback citations")
-                fallback_refs = " ".join(
-                    _render_citation_reference(item) for item in fallback_items
-                )
-                answer = f"{state['answer'].rstrip()} {fallback_refs}".strip()
-            return {"answer": answer, "citations": citations}
-
-        answer, citations = _render_answer_citations(answer, citation_pool)
         return {"answer": answer, "citations": citations}
 
     def route_after_input_guard(state: RAGState) -> Literal["embed", "__end__"]:

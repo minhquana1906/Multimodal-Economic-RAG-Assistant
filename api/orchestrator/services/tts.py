@@ -35,6 +35,12 @@ class TTSClient:
                 )
                 response.raise_for_status()
                 audio_bytes = response.content
+                if not audio_bytes or len(audio_bytes) < 44:
+                    logger.warning(
+                        f"TTS returned suspiciously small response: {len(audio_bytes)} bytes "
+                        f"(status={response.status_code}, content-type={response.headers.get('content-type')})"
+                    )
+                    return None
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 logger.log(
                     "RETRIEVAL",
@@ -53,7 +59,6 @@ class TTSClient:
             logger.warning(f"TTS service unreachable: {e}")
             return None
 
-    @traceable(name="TTS Unload", run_type="chain")
     async def unload(self) -> None:
         """Request explicit model unload to free VRAM."""
         try:
