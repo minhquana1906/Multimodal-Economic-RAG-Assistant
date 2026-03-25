@@ -30,6 +30,8 @@ class ChatRequest(BaseModel):
     model: str
     messages: list[Message] = Field(min_length=1)
     response_mode: ResponseMode = "text"
+    modalities: list[str] | None = None
+    audio: dict | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
     stream: bool = False

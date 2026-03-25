@@ -179,6 +179,31 @@ async def test_chat_endpoint_passes_audio_response_mode_into_state():
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_infers_audio_response_mode_from_modalities():
+    app, mock_graph, _ = _make_app(
+        {"answer": "Giá đang tăng chậm lại.", "citations": []}
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "multimodal-economic-rag",
+                "messages": [{"role": "user", "content": "Giá nhà đang tăng hay giảm?"}],
+                "modalities": ["text", "audio"],
+                "audio": {"voice": "alloy", "format": "wav"},
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    state = mock_graph.ainvoke.await_args.args[0]
+    assert state["response_mode"] == "audio"
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
     app, _, _ = _make_app(
         {

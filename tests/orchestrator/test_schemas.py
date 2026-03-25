@@ -54,6 +54,21 @@ def test_chat_request_response_mode_validation():
         ChatRequest(model="m", messages=msgs, response_mode="voice")
 
 
+def test_chat_request_accepts_audio_standard_fields():
+    from orchestrator.models.schemas import ChatRequest, Message
+
+    msgs = [Message(role="user", content="hi")]
+    req = ChatRequest(
+        model="m",
+        messages=msgs,
+        modalities=["text", "audio"],
+        audio={"voice": "alloy", "format": "wav"},
+    )
+
+    assert req.modalities == ["text", "audio"]
+    assert req.audio == {"voice": "alloy", "format": "wav"}
+
+
 def test_chat_request_empty_messages_invalid():
     from orchestrator.models.schemas import ChatRequest
     from pydantic import ValidationError
