@@ -40,7 +40,7 @@ graph TB
             QDRANT_VOL[("qdrant_storage<br/>Named Volume")]
         end
 
-        ENV[".env<br/>HUGGING_FACE_HUB_TOKEN<br/>TAVILY_API_KEY<br/>CLOUDFLARE_TUNNEL_TOKEN<br/>LLM_URL"]
+        ENV[".env<br/>HF_TOKEN<br/>TAVILY_API_KEY<br/>CLOUDFLARE_TUNNEL_TOKEN<br/>LLM_URL"]
     end
 
     subgraph RemoteGPU["🌐 Remote GPU (vast.ai)"]

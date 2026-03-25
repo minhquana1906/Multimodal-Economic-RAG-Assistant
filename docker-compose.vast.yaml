@@ -56,7 +56,7 @@ services:
     ports:
       - "8001:8001"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
       MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
@@ -87,7 +87,7 @@ services:
     ports:
       - "8002:8002"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
       <<: *hf-cache-env
     volumes:
@@ -115,7 +115,7 @@ services:
     ports:
       - "8003:8003"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       GUARD_MODEL: ${SERVICES__GUARD_MODEL}
       GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
       <<: *hf-cache-env
@@ -145,8 +145,7 @@ services:
     ports:
       - "8004:8004"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      HF_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       VLLM_WORKER_MULTIPROC_METHOD: spawn
     volumes:
       - hf_cache:/root/.cache/huggingface
@@ -187,8 +186,7 @@ services:
     ports:
       - "8007:8007"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-      HF_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       VLLM_WORKER_MULTIPROC_METHOD: spawn
     volumes:
       - hf_cache:/root/.cache/huggingface
@@ -311,7 +309,7 @@ services:
       SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
       SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
       INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       <<: *hf-cache-env
     volumes:
       - hf_cache:/data/huggingface
@@ -333,7 +331,7 @@ services:
     ports:
       - "8005:8005"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       ASR_MODEL: ${SERVICES__ASR_MODEL}
       ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
       ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
@@ -365,7 +363,7 @@ services:
     ports:
       - "8006:8006"
     environment:
-      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
       TTS_MODEL: ${SERVICES__TTS_MODEL}
       TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
       TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
