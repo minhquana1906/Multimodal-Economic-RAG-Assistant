@@ -112,6 +112,8 @@ async def test_classify_uses_inference_mode_disables_cache_and_logs_metrics(clie
     assert response.status_code == 200
     assert mock_inference.called
     assert mock_model.generate.call_args.kwargs["use_cache"] is False
+    assert mock_model.generate.call_args.kwargs["do_sample"] is False
+    assert "temperature" not in mock_model.generate.call_args.kwargs
     assert mock_model.generate.call_args.kwargs["max_new_tokens"] == 64
     mock_cleanup.assert_called_once()
     mock_metrics.assert_called_once()

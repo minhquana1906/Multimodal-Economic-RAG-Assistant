@@ -39,7 +39,7 @@ def test_dev_compose_persists_huggingface_cache_for_model_and_ingest_services():
 
     assert "HF_HOME: /data/huggingface" in content
     assert "HUGGINGFACE_HUB_CACHE: /data/huggingface/hub" in content
-    assert "TRANSFORMERS_CACHE: /data/huggingface/hub" in content
+    assert "TRANSFORMERS_CACHE:" not in content
     assert "./.cache/huggingface:/data/huggingface" in content
 
 
