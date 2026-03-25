@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from langsmith import traceable
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -22,6 +21,7 @@ def create_audio_router(asr: ASRClient, tts: TTSClient) -> APIRouter:
 
     @router.post("/v1/audio/transcriptions")
     @router.post("/audio/transcriptions")
+    @traceable(name="Audio Transcription", run_type="chain")
     async def audio_transcriptions(
         file: UploadFile = File(...),
         model: str = Form("whisper-1"),
@@ -50,6 +50,7 @@ def create_audio_router(asr: ASRClient, tts: TTSClient) -> APIRouter:
 
     @router.post("/v1/audio/speech")
     @router.post("/audio/speech")
+    @traceable(name="Audio Speech", run_type="chain")
     async def audio_speech(request: AudioSpeechRequest):
         logger.info(
             f"TTS request: input_len={len(request.input)} speed={request.speed} "
