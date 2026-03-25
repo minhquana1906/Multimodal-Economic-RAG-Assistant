@@ -31,6 +31,8 @@ def test_vast_compose_uses_image_based_deployment_and_shared_cache():
     assert "pull_policy: always" in content
     assert "hf_cache:" in content
     assert "HF_HOME: /data/huggingface" in content
+    assert "HUGGINGFACE_HUB_CACHE: /data/huggingface/hub" in content
+    assert "TRANSFORMERS_CACHE:" not in content
     assert "hf_cache:/data/huggingface" in content
     assert "hf_cache:/root/.cache/huggingface" in content
     assert "build:" not in content
