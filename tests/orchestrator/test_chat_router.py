@@ -151,6 +151,31 @@ async def test_chat_endpoint_builds_backend_conversation_state():
     assert state["task_type"] == "chat"
     assert "Bất động sản đang ảnh hưởng" in state["conversation_context"]
     assert "Còn trái phiếu doanh nghiệp thì sao?" in state["resolved_query"]
+    assert state["response_mode"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_passes_audio_response_mode_into_state():
+    app, mock_graph, _ = _make_app(
+        {"answer": "Giá đang tăng chậm lại.", "citations": []}
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "multimodal-economic-rag",
+                "messages": [{"role": "user", "content": "Giá nhà đang tăng hay giảm?"}],
+                "response_mode": "audio",
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    state = mock_graph.ainvoke.await_args.args[0]
+    assert state["response_mode"] == "audio"
 
 
 @pytest.mark.asyncio

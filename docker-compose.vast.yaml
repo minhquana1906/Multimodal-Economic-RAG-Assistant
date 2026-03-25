@@ -294,7 +294,7 @@ services:
         condition: service_healthy
 
   tunnel:
-    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
+    image: cloudflare/cloudflared:2026.3.0
     hostname: tunnel
     pull_policy: always
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}

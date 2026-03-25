@@ -21,6 +21,7 @@ networks:
 volumes:
   qdrant_storage:
   open-webui:
+  ollama_data:
 
 services:
   qdrant:
@@ -168,7 +169,7 @@ services:
       start_period: 15s
 
   webui:
-    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.8.10}
+    image: ghcr.io/open-webui/open-webui:v0.8.10
     hostname: webui
     ports:
       - "8080:8080"
@@ -191,6 +192,9 @@ services:
       ENABLE_LOGIN_FORM: "true"
       DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
     volumes:
       - open-webui:/app/backend/data
     networks:
@@ -200,7 +204,7 @@ services:
         condition: service_healthy
 
   tunnel:
-    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
+    image: cloudflare/cloudflared:2026.3.0
     hostname: tunnel
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
@@ -260,8 +264,8 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 6
+      start_period: 30s
     profiles:
       - audio
 
@@ -294,7 +298,25 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 6
+      start_period: 30s
     profiles:
       - audio
+
+  ollama:
+    <<: *gpu-reservation
+    image: ollama/ollama:latest
+    hostname: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - rag-net
+    command: ["serve"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

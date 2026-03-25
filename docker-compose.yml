@@ -162,7 +162,7 @@ services:
 
   # === Open WebUI ===
   webui:
-    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.8.10}
+    image: ghcr.io/open-webui/open-webui:v0.8.10
     hostname: webui
     ports:
       - "8080:8080"
@@ -181,7 +181,7 @@ services:
       - ENABLE_RAG_WEB_SEARCH=false
       - ENABLE_IMAGE_GENERATION=false
       - WEBUI_AUTH=${WEBUI_AUTH:-false}
-      - DEFAULT_MODELS=multimodal-economic-rag
+      - DEFAULT_MODELS=Multimodal-Economic-RAG
     volumes:
       - open-webui:/app/backend/data
     networks:
@@ -192,7 +192,7 @@ services:
 
   # === Cloudflare Tunnel ===
   tunnel:
-    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
+    image: cloudflare/cloudflared:2026.3.0
     hostname: tunnel
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
