@@ -32,4 +32,4 @@ services/*/models/
 .agents/
 CLAUDE.md
 .mcp.json
-skill-lock
+skills-lock.json
