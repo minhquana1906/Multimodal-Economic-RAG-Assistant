@@ -20,7 +20,12 @@ class LLMClient:
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
-        self._client = AsyncOpenAI(base_url=url, api_key=api_key, timeout=timeout)
+        resolved_api_key = api_key or "dummy"
+        self._client = AsyncOpenAI(
+            base_url=url,
+            api_key=resolved_api_key,
+            timeout=timeout,
+        )
 
     async def _create_completion(
         self,

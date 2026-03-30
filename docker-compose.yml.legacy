@@ -34,12 +34,15 @@ services:
       - "8001:8001"
     environment:
       - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-120}
+      - HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-120}
       - EMBEDDING_MODEL=${SERVICES__EMBEDDING_MODEL}
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - MAX_SEQ_LENGTH=${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
       - ENCODE_BATCH_SIZE=${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
     networks:
       - rag-net
+    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -58,7 +61,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 120s
+      start_period: 300s
 
   # === Reranker Service (GPU) ===
   reranker:
@@ -69,10 +72,13 @@ services:
       - "8002:8002"
     environment:
       - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-120}
+      - HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-120}
       - RERANKER_MODEL=${SERVICES__RERANKER_MODEL}
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     networks:
       - rag-net
+    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -91,7 +97,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 120s
+      start_period: 300s
 
   # === Guard Service (GPU) ===
   guard:
@@ -102,11 +108,14 @@ services:
       - "8003:8003"
     environment:
       - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_ETAG_TIMEOUT=${HF_HUB_ETAG_TIMEOUT:-120}
+      - HF_HUB_DOWNLOAD_TIMEOUT=${HF_HUB_DOWNLOAD_TIMEOUT:-120}
       - GUARD_MODEL=${SERVICES__GUARD_MODEL}
       - GUARD_MAX_NEW_TOKENS=${SERVICES__GUARD_MAX_NEW_TOKENS}
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     networks:
       - rag-net
+    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -125,7 +134,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 120s
+      start_period: 300s
 
   # === FastAPI Orchestrator ===
   orchestrator:

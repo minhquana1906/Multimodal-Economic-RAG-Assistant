@@ -24,8 +24,6 @@ from fastembed.sparse.bm25 import Bm25
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
-    NamedSparseVector,
-    NamedVector,
     PointStruct,
     SparseIndexParams,
     SparseVectorParams,
@@ -33,7 +31,12 @@ from qdrant_client.models import (
 )
 from underthesea import word_tokenize
 
-from chunker import chunk_article, make_chunk_id
+from chunker import (
+    MAX_CHUNK_CHARS,
+    MAX_CHUNK_WORDS,
+    chunk_article,
+    make_chunk_id,
+)
 
 try:
     from langsmith import traceable
@@ -64,6 +67,11 @@ DENSE_DIM: int = 1024
 MAX_EMBED_RETRIES: int = 3
 EMBED_RETRY_DELAY: float = 5.0
 EXPECTED_MIN: int = 400_000
+CHUNKING_VERSION: int = 2
+FORCE_RECREATE: bool = (
+    os.getenv("INGEST__FORCE_RECREATE", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -103,6 +111,57 @@ def create_collection(
     )
 
 
+def get_collection_chunking_version(
+    client: QdrantClient, collection_name: str
+) -> tuple[bool, int | None]:
+    """Return whether the collection has points and which chunking version they use."""
+    records, _ = client.scroll(
+        collection_name=collection_name,
+        limit=1,
+        with_payload=True,
+        with_vectors=False,
+    )
+    if not records:
+        return False, None
+
+    payload = getattr(records[0], "payload", {}) or {}
+    version = payload.get("chunking_version")
+    try:
+        return True, int(version) if version is not None else None
+    except (TypeError, ValueError):
+        return True, None
+
+
+def ensure_collection_ready(
+    client: QdrantClient,
+    collection_name: str,
+    dense_dim: int = DENSE_DIM,
+    force_recreate: bool = FORCE_RECREATE,
+) -> None:
+    """Ensure the target collection is compatible with the current chunking strategy."""
+    existing = [c.name for c in client.get_collections().collections]
+    if collection_name not in existing:
+        create_collection(client, collection_name, dense_dim=dense_dim)
+        return
+
+    if force_recreate:
+        logger.warning(
+            f"Recreating collection '{collection_name}' because INGEST__FORCE_RECREATE is enabled."
+        )
+        client.delete_collection(collection_name=collection_name)
+        create_collection(client, collection_name, dense_dim=dense_dim)
+        return
+
+    has_points, version = get_collection_chunking_version(client, collection_name)
+    if has_points and version != CHUNKING_VERSION:
+        raise RuntimeError(
+            f"Collection '{collection_name}' uses chunking version {version!r}, "
+            f"expected {CHUNKING_VERSION}. Re-run with INGEST__FORCE_RECREATE=true "
+            "or ingest into a new collection name to avoid mixing old long chunks "
+            "with the new bounded chunking strategy."
+        )
+
+
 def should_skip_ingestion(
     client: QdrantClient, collection_name: str, expected_min: int = EXPECTED_MIN
 ) -> bool:
@@ -118,6 +177,30 @@ def should_skip_ingestion(
     except Exception:
         pass  # Collection doesn't exist yet
     return False
+
+
+def validate_chunk_batch(batch: list[dict]) -> None:
+    """Fail fast if any chunk still violates the ingestion size budget."""
+    oversized: list[str] = []
+
+    for chunk in batch:
+        text = chunk.get("text", "")
+        word_count = len(text.split())
+        if len(text) <= MAX_CHUNK_CHARS and word_count <= MAX_CHUNK_WORDS:
+            continue
+
+        oversized.append(
+            f"url={chunk.get('url', '')} chunk_index={chunk.get('chunk_index', '?')} "
+            f"chars={len(text)} words={word_count}"
+        )
+
+    if oversized:
+        details = "; ".join(oversized[:3])
+        raise ValueError(
+            "Oversized chunk detected before embedding/upsert. "
+            f"Budget chars<={MAX_CHUNK_CHARS}, words<={MAX_CHUNK_WORDS}. "
+            f"Examples: {details}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -190,14 +273,16 @@ async def main() -> None:
 
     qdrant = QdrantClient(url=QDRANT_URL)
 
+    ensure_collection_ready(
+        qdrant,
+        COLLECTION_NAME,
+        dense_dim=DENSE_DIM,
+        force_recreate=FORCE_RECREATE,
+    )
+
     # Idempotency guard
     if should_skip_ingestion(qdrant, COLLECTION_NAME):
         return
-
-    # Ensure collection exists
-    existing = [c.name for c in qdrant.get_collections().collections]
-    if COLLECTION_NAME not in existing:
-        create_collection(qdrant, COLLECTION_NAME, dense_dim=DENSE_DIM)
 
     # Load & chunk
     chunks = load_and_chunk_articles()
@@ -210,6 +295,7 @@ async def main() -> None:
 
     for batch_start in range(0, total, BATCH_SIZE):
         batch = chunks[batch_start : batch_start + BATCH_SIZE]
+        validate_chunk_batch(batch)
         texts = [c["text"] for c in batch]
 
         # Dense embeddings
@@ -240,6 +326,9 @@ async def main() -> None:
                         "chunk_index": chunk["chunk_index"],
                         "published_date": chunk.get("published_date", ""),
                         "category": chunk.get("category", ""),
+                        "chunking_version": CHUNKING_VERSION,
+                        "char_count": len(chunk["text"]),
+                        "word_count": len(chunk["text"].split()),
                     },
                 )
             )

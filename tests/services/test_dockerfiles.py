@@ -75,3 +75,14 @@ def test_asr_dockerfile_installs_ffmpeg_for_torchcodec_decode():
 def test_asr_requirements_include_torchcodec():
     content = _read("services/asr/requirements.txt")
     assert "torchcodec" in content
+
+
+def test_asr_dockerfile_raises_pip_timeout_for_large_cuda_wheels():
+    content = _read("services/asr/Dockerfile")
+    assert "PIP_DEFAULT_TIMEOUT=300" in content
+    assert "PIP_RETRIES=10" in content
+
+
+def test_asr_dockerfile_installs_shared_python_runtime_for_torchcodec():
+    content = _read("services/asr/Dockerfile")
+    assert "libpython3.12t64" in content or "libpython3.12 " in content

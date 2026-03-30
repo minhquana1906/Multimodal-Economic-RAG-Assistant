@@ -93,6 +93,68 @@ def test_chunk_article_short_paragraphs_merged():
 
 
 # ---------------------------------------------------------------------------
+# Test 4: Single-block long articles must still be split into bounded chunks
+# ---------------------------------------------------------------------------
+
+def test_chunk_article_single_block_long_content_is_split():
+    article = {
+        "title": "Lạm phát và tỷ giá tạo áp lực lên thị trường trong quý gần đây",
+        "content": " ".join(
+            [
+                (
+                    "Thị trường ghi nhận nhiều biến động liên tiếp khi lạm phát, tỷ giá, "
+                    "chi phí vốn và nhu cầu tiêu dùng cùng thay đổi trong thời gian ngắn."
+                )
+            ]
+            * 80
+        ),
+        "url": "https://example.com/single-block",
+        "published_date": "2024-04-22",
+        "category": "Vĩ mô",
+        "source": "example",
+    }
+
+    chunks = chunk_article(article)
+
+    assert len(chunks) > 1, "Long single-block content should be split into multiple chunks"
+    assert chunks[0]["chunk_type"] == "title_lead"
+    assert article["title"] in chunks[0]["text"]
+    assert max(len(chunk["text"]) for chunk in chunks) <= 1500
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Oversized body paragraphs must be split before ingestion
+# ---------------------------------------------------------------------------
+
+def test_chunk_article_splits_oversized_body_paragraph():
+    article = {
+        "title": "Doanh nghiệp đẩy mạnh đầu tư công nghệ để giảm chi phí vận hành",
+        "content": (
+            "Đây là đoạn mở đầu đủ dài để tạo title_lead chunk và giới thiệu bối cảnh bài viết.\n\n"
+            + " ".join(
+                [
+                    (
+                        "Doanh nghiệp trong nhiều lĩnh vực đang tái cấu trúc quy trình, "
+                        "mở rộng tự động hóa và tối ưu tồn kho để giảm áp lực chi phí."
+                    )
+                ]
+                * 70
+            )
+        ),
+        "url": "https://example.com/oversized-body",
+        "published_date": "2024-07-10",
+        "category": "Doanh nghiệp",
+        "source": "example",
+    }
+
+    chunks = chunk_article(article)
+
+    body_chunks = [c for c in chunks if c["chunk_type"] == "body_paragraph"]
+    assert len(body_chunks) >= 2, "Oversized body paragraphs should be split into multiple body chunks"
+    assert max(len(chunk["text"]) for chunk in chunks) <= 1500
+
+
+# ---------------------------------------------------------------------------
 # Bonus: deterministic IDs
 # ---------------------------------------------------------------------------
 

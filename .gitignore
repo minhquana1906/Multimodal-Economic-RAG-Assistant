@@ -34,3 +34,5 @@ CLAUDE.md
 .mcp.json
 skills-lock.json
 .env.vast
+.serena
+.pytest*

@@ -120,15 +120,23 @@ def test_prompts_config_defaults():
     assert "kinh tế" in cfg.reranker_instruction
 
 
-def test_get_settings_returns_same_instance():
-    from orchestrator.config import get_settings
+def test_get_settings_returns_same_instance(monkeypatch):
+    import orchestrator.config as config
 
-    get_settings.cache_clear()
+    created: list[object] = []
 
-    first = get_settings()
-    second = get_settings()
+    class DummySettings:
+        def __init__(self):
+            created.append(self)
+
+    monkeypatch.setattr(config, "Settings", DummySettings)
+    config.get_settings.cache_clear()
+
+    first = config.get_settings()
+    second = config.get_settings()
 
     assert first is second
+    assert len(created) == 1
 
 
 def test_observability_api_keys_can_be_omitted(tmp_path):
