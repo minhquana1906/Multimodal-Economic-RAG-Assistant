@@ -36,3 +36,4 @@ skills-lock.json
 .env.vast
 .serena
 .pytest*
+data/

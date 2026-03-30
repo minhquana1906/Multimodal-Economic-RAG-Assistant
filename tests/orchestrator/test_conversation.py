@@ -83,6 +83,41 @@ def test_rewrite_followup_query_uses_prior_context():
     assert "Còn trái phiếu thì sao?" in rewritten
 
 
+def test_normalize_query_with_context_includes_summary_and_recent_turns():
+    from orchestrator.services.conversation import normalize_query_with_context
+
+    resolved = normalize_query_with_context(
+        raw_query="còn trái phiếu dn thì sao",
+        summary="Người dùng đang hỏi về tác động của bất động sản lên thị trường vốn.",
+        recent_turns=[
+            Message(
+                role="user",
+                content="Bất động sản đang ảnh hưởng thế nào đến thị trường vốn?",
+            ),
+            Message(role="assistant", content="Áp lực vốn vẫn còn cao."),
+        ],
+    )
+
+    assert "trái phiếu" in resolved.lower()
+    assert "Bất động sản" in resolved
+    assert resolved != "còn trái phiếu dn thì sao"
+
+
+def test_build_query_rewrite_prompt_contains_raw_query_and_context():
+    from orchestrator.services.conversation import build_query_rewrite_prompt
+
+    prompt = build_query_rewrite_prompt(
+        raw_query="còn trái phiếu dn thì sao",
+        summary="Người dùng đang hỏi về thị trường vốn.",
+        recent_turns=[Message(role="assistant", content="Áp lực vốn vẫn còn cao.")],
+    )
+
+    assert "còn trái phiếu dn thì sao" in prompt
+    assert "Người dùng đang hỏi về thị trường vốn." in prompt
+    assert "Viết lại thành đúng 1 câu hỏi hoàn chỉnh" in prompt
+    assert "Áp lực vốn vẫn còn cao." in prompt
+
+
 def test_classify_task_identifies_auxiliary_prompt():
     from orchestrator.services.conversation import classify_task
 

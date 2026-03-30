@@ -27,7 +27,7 @@ from orchestrator.services.conversation import (
     classify_task,
     extract_latest_user_query,
     normalize_messages,
-    rewrite_followup_query,
+    resolve_user_query,
     should_summarize,
     summarize_history,
 )
@@ -67,7 +67,11 @@ def _build_initial_state(
     }
 
 
-def _prepare_conversation(messages, max_tokens: int | None) -> dict:
+async def _prepare_conversation(
+    messages,
+    max_tokens: int | None,
+    query_llm: Any | None,
+) -> dict:
     normalized_messages = normalize_messages(messages)
     raw_query = extract_latest_user_query(normalized_messages)
     task_type = classify_task(normalized_messages, raw_query)
@@ -87,11 +91,15 @@ def _prepare_conversation(messages, max_tokens: int | None) -> dict:
         conversation_summary,
         recent_turns,
     )
-    resolved_query = rewrite_followup_query(
-        raw_query,
-        conversation_summary,
-        prior_turns[-DEFAULT_RECENT_TURNS:],
-    )
+    resolved_query = raw_query
+    if task_type == "chat":
+        resolved_query = await resolve_user_query(
+            raw_query=raw_query,
+            summary=conversation_summary,
+            recent_turns=prior_turns[-DEFAULT_RECENT_TURNS:],
+            llm=query_llm,
+            max_tokens=max_tokens,
+        )
 
     return {
         "messages": normalized_messages,
@@ -122,7 +130,7 @@ async def _run_request(
     max_tokens: int | None,
     response_mode: str = "text",
 ) -> dict:
-    conversation = _prepare_conversation(messages, max_tokens)
+    conversation = await _prepare_conversation(messages, max_tokens, task_llm)
     if task_llm is not None and conversation["task_type"] != "chat":
         history = build_auxiliary_history(
             conversation["messages"],

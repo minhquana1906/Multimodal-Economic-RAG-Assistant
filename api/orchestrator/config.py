@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,15 +51,41 @@ class ServicesConfig(BaseModel):
 class RAGConfig(BaseModel):
     retrieval_top_k: int
     rerank_top_n: int
-    fallback_min_chunks: int
-    fallback_score_threshold: float
+    web_fallback_min_chunks: int = Field(
+        default=2,
+        validation_alias=AliasChoices(
+            "web_fallback_min_chunks",
+            "fallback_min_chunks",
+        ),
+    )
+    web_fallback_hard_threshold: float = Field(
+        default=0.70,
+        validation_alias=AliasChoices(
+            "web_fallback_hard_threshold",
+            "fallback_score_threshold",
+        ),
+    )
+    web_fallback_soft_threshold: float = Field(
+        default=0.85,
+        validation_alias=AliasChoices(
+            "web_fallback_soft_threshold",
+        ),
+    )
     context_limit: int
     citation_limit: int
+
+    @property
+    def fallback_min_chunks(self) -> int:
+        return self.web_fallback_min_chunks
+
+    @property
+    def fallback_score_threshold(self) -> float:
+        return self.web_fallback_hard_threshold
 
 
 class PromptsConfig(BaseModel):
     system_prompt: str = (
-        "Bạn là trợ lý AI chuyên về kinh tế tài chính Việt Nam. Hãy trả lời ngắn gọn, chính xác dựa trên thông tin được cung cấp."
+        "Bạn là trợ lý AI chuyên về kinh tế tài chính Việt Nam. Hãy trả lời ngắn gọn, chính xác bằng tiếng Việt dựa trên nguồn được cung cấp."
     )
     user_template: str = (
         "Dựa vào các đoạn văn bản sau:\n{context}\n\nTrả lời: {question}"
@@ -67,7 +93,9 @@ class PromptsConfig(BaseModel):
     reranker_instruction: str = (
         "Cho một câu hỏi về kinh tế, tài chính, đánh giá mức độ liên quan của đoạn văn bản với câu hỏi"
     )
-    no_context_message: str = "Xin lỗi, tôi không tìm thấy thông tin liên quan."
+    no_context_message: str = (
+        "Không tìm thấy dữ liệu phù hợp trong tài liệu nội bộ hoặc nguồn web hiện có."
+    )
     guard_error_message: str = (
         "Xin lỗi, tôi không thể xử lý yêu cầu của bạn do yêu cầu đã vi phạm chính sách của chúng tôi."
     )

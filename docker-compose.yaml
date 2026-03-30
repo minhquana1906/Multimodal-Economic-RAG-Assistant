@@ -252,8 +252,8 @@ services:
                 condition: service_healthy
             guard:
                 condition: service_healthy
-            llm:
-                condition: service_healthy
+            # llm:
+            #     condition: service_healthy
         healthcheck:
             test:
                 [

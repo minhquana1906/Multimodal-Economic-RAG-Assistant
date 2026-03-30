@@ -1,321 +1,322 @@
 x-hf-cache-env: &hf-cache-env
-  HF_HOME: /data/huggingface
-  HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
+    HF_HOME: /data/huggingface
+    HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
 
 x-hf-cache-volume: &hf-cache-volume ./.cache/huggingface:/data/huggingface
 
 x-gpu-reservation: &gpu-reservation
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: 1
-            capabilities: [gpu]
+    deploy:
+        resources:
+            reservations:
+                devices:
+                    - driver: nvidia
+                      count: 1
+                      capabilities: [gpu]
 
 networks:
-  rag-net:
-    driver: bridge
+    rag-net:
+        driver: bridge
 
 volumes:
-  qdrant_storage:
-  open-webui:
-  ollama_data:
+    qdrant_storage:
+    open-webui:
+    ollama_data:
 
 services:
-  qdrant:
-    image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.17.0}
-    hostname: qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_storage:/qdrant/storage
-    networks:
-      - rag-net
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/localhost/6333' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    qdrant:
+        image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.17.0}
+        hostname: qdrant
+        ports:
+            - '6333:6333'
+            - '6334:6334'
+        volumes:
+            - qdrant_storage:/qdrant/storage
+        networks:
+            - rag-net
+        healthcheck:
+            test:
+                ['CMD-SHELL', "bash -c ':> /dev/tcp/localhost/6333' || exit 1"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
 
-  embedding:
-    <<: *gpu-reservation
-    build:
-      context: ./services/embedding
-    hostname: embedding
-    ports:
-      - "8001:8001"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
-      ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
-      <<: *hf-cache-env
-    volumes:
-      - *hf-cache-volume
-      - ./services/embedding:/app
-    networks:
-      - rag-net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 120s
+    embedding:
+        <<: *gpu-reservation
+        build:
+            context: ./services/embedding
+        hostname: embedding
+        ports:
+            - '8001:8001'
+        environment:
+            HF_TOKEN: ${HF_TOKEN}
+            EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
+            PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+            MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
+            ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
+            <<: *hf-cache-env
+        volumes:
+            - *hf-cache-volume
+            - ./services/embedding:/app
+        networks:
+            - rag-net
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 12
+            start_period: 120s
 
-  reranker:
-    <<: *gpu-reservation
-    build:
-      context: ./services/reranker
-    hostname: reranker
-    ports:
-      - "8002:8002"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      <<: *hf-cache-env
-    volumes:
-      - *hf-cache-volume
-      - ./services/reranker:/app
-    networks:
-      - rag-net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 120s
+    reranker:
+        <<: *gpu-reservation
+        build:
+            context: ./services/reranker
+        hostname: reranker
+        ports:
+            - '8002:8002'
+        environment:
+            HF_TOKEN: ${HF_TOKEN}
+            RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
+            PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+            <<: *hf-cache-env
+        volumes:
+            - *hf-cache-volume
+            - ./services/reranker:/app
+        networks:
+            - rag-net
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 12
+            start_period: 120s
 
-  guard:
-    <<: *gpu-reservation
-    build:
-      context: ./services/guard
-    hostname: guard
-    ports:
-      - "8003:8003"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      GUARD_MODEL: ${SERVICES__GUARD_MODEL}
-      GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      <<: *hf-cache-env
-    volumes:
-      - *hf-cache-volume
-      - ./services/guard:/app
-    networks:
-      - rag-net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 120s
+    guard:
+        <<: *gpu-reservation
+        build:
+            context: ./services/guard
+        hostname: guard
+        ports:
+            - '8003:8003'
+        environment:
+            HF_TOKEN: ${HF_TOKEN}
+            GUARD_MODEL: ${SERVICES__GUARD_MODEL}
+            GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
+            PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+            <<: *hf-cache-env
+        volumes:
+            - *hf-cache-volume
+            - ./services/guard:/app
+        networks:
+            - rag-net
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 12
+            start_period: 120s
 
-  orchestrator:
-    build:
-      context: ./api
-    hostname: orchestrator
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - ./api:/app
-    networks:
-      - rag-net
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      embedding:
-        condition: service_healthy
-      reranker:
-        condition: service_healthy
-      guard:
-        condition: service_healthy
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    orchestrator:
+        build:
+            context: ./api
+        hostname: orchestrator
+        ports:
+            - '8000:8000'
+        env_file:
+            - .env
+        volumes:
+            - ./api:/app
+        networks:
+            - rag-net
+        # depends_on:
+        #   qdrant:
+        #     condition: service_healthy
+        #   embedding:
+        #     condition: service_healthy
+        #   reranker:
+        #     condition: service_healthy
+        #   guard:
+        #     condition: service_healthy
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 15s
 
-  webui:
-    image: ghcr.io/open-webui/open-webui:v0.8.10
-    hostname: webui
-    ports:
-      - "8080:8080"
-    environment:
-      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
-      AUDIO_STT_ENGINE: ${AUDIO_STT_ENGINE:-openai}
-      AUDIO_STT_OPENAI_API_BASE_URL: ${AUDIO_STT_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
-      AUDIO_STT_OPENAI_API_KEY: ${AUDIO_STT_OPENAI_API_KEY:-dummy}
-      AUDIO_STT_MODEL: ${AUDIO_STT_MODEL:-whisper-1}
-      AUDIO_TTS_ENGINE: ${AUDIO_TTS_ENGINE:-openai}
-      AUDIO_TTS_OPENAI_API_BASE_URL: ${AUDIO_TTS_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
-      AUDIO_TTS_OPENAI_API_KEY: ${AUDIO_TTS_OPENAI_API_KEY:-dummy}
-      AUDIO_TTS_MODEL: ${AUDIO_TTS_MODEL:-tts-1}
-      AUDIO_TTS_VOICE: ${AUDIO_TTS_VOICE:-alloy}
-      ENABLE_RAG_WEB_SEARCH: "false"
-      ENABLE_IMAGE_GENERATION: "false"
-      WEBUI_AUTH: "true"
-      ENABLE_SIGNUP: "true"
-      ENABLE_LOGIN_FORM: "true"
-      DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
-      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
-      ENABLE_FOLLOW_UP_GENERATION: "false"
-      ENABLE_TITLE_GENERATION: "false"
-      ENABLE_TAGS_GENERATION: "false"
-    volumes:
-      - open-webui:/app/backend/data
-    networks:
-      - rag-net
-    depends_on:
-      orchestrator:
-        condition: service_healthy
+    webui:
+        image: ghcr.io/open-webui/open-webui:v0.8.10
+        hostname: webui
+        ports:
+            - '8080:8080'
+        environment:
+            OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+            AUDIO_STT_ENGINE: ${AUDIO_STT_ENGINE:-openai}
+            AUDIO_STT_OPENAI_API_BASE_URL: ${AUDIO_STT_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+            AUDIO_STT_OPENAI_API_KEY: ${AUDIO_STT_OPENAI_API_KEY:-dummy}
+            AUDIO_STT_MODEL: ${AUDIO_STT_MODEL:-whisper-1}
+            AUDIO_TTS_ENGINE: ${AUDIO_TTS_ENGINE:-openai}
+            AUDIO_TTS_OPENAI_API_BASE_URL: ${AUDIO_TTS_OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+            AUDIO_TTS_OPENAI_API_KEY: ${AUDIO_TTS_OPENAI_API_KEY:-dummy}
+            AUDIO_TTS_MODEL: ${AUDIO_TTS_MODEL:-tts-1}
+            AUDIO_TTS_VOICE: ${AUDIO_TTS_VOICE:-alloy}
+            ENABLE_RAG_WEB_SEARCH: 'false'
+            ENABLE_IMAGE_GENERATION: 'false'
+            WEBUI_AUTH: 'true'
+            ENABLE_SIGNUP: 'true'
+            ENABLE_LOGIN_FORM: 'true'
+            DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
+            WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
+            ENABLE_FOLLOW_UP_GENERATION: 'false'
+            ENABLE_TITLE_GENERATION: 'false'
+            ENABLE_TAGS_GENERATION: 'false'
+        volumes:
+            - open-webui:/app/backend/data
+        networks:
+            - rag-net
+        depends_on:
+            orchestrator:
+                condition: service_healthy
 
-  tunnel:
-    image: cloudflare/cloudflared:2026.3.0
-    hostname: tunnel
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    networks:
-      - rag-net
-    depends_on:
-      - webui
-    restart: unless-stopped
+    tunnel:
+        image: cloudflare/cloudflared:2026.3.0
+        hostname: tunnel
+        command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+        networks:
+            - rag-net
+        depends_on:
+            - webui
+        restart: unless-stopped
 
-  ingest:
-    build:
-      context: ./scripts
-    environment:
-      SERVICES__EMBEDDING_URL: ${SERVICES__EMBEDDING_URL}
-      SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
-      SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
-      INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
-      HF_TOKEN: ${HF_TOKEN}
-      <<: *hf-cache-env
-    volumes:
-      - *hf-cache-volume
-      - ./scripts:/app
-    networks:
-      - rag-net
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      embedding:
-        condition: service_healthy
-    profiles:
-      - ingest
+    ingest:
+        build:
+            context: ./scripts
+        environment:
+            SERVICES__EMBEDDING_URL: ${SERVICES__EMBEDDING_URL}
+            SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
+            SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
+            INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
+            HF_TOKEN: ${HF_TOKEN}
+            <<: *hf-cache-env
+        volumes:
+            - *hf-cache-volume
+            - ./scripts:/app
+        networks:
+            - rag-net
+        depends_on:
+            qdrant:
+                condition: service_healthy
+            embedding:
+                condition: service_healthy
+        profiles:
+            - ingest
 
-  asr:
-    <<: *gpu-reservation
-    build:
-      context: ./services/asr
-    hostname: asr
-    ports:
-      - "8005:8005"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      ASR_MODEL: ${SERVICES__ASR_MODEL}
-      ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
-      ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
-      <<: *hf-cache-env
-    volumes:
-      - *hf-cache-volume
-      - ./services/asr:/app
-    networks:
-      - rag-net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
-    profiles:
-      - audio
+    asr:
+        <<: *gpu-reservation
+        build:
+            context: ./services/asr
+        hostname: asr
+        ports:
+            - '8005:8005'
+        environment:
+            HF_TOKEN: ${HF_TOKEN}
+            ASR_MODEL: ${SERVICES__ASR_MODEL}
+            ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
+            ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
+            <<: *hf-cache-env
+        volumes:
+            - *hf-cache-volume
+            - ./services/asr:/app
+        networks:
+            - rag-net
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 30s
+        profiles:
+            - audio
 
-  tts:
-    <<: *gpu-reservation
-    build:
-      context: ./services/tts
-    hostname: tts
-    ports:
-      - "8006:8006"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      TTS_MODEL: ${SERVICES__TTS_MODEL}
-      TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
-      TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
-      TTS_SPEED: ${SERVICES__TTS_SPEED}
-      <<: *hf-cache-env
-    volumes:
-      - *hf-cache-volume
-      - ./services/tts:/app
-    networks:
-      - rag-net
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
-    profiles:
-      - audio
+    tts:
+        <<: *gpu-reservation
+        build:
+            context: ./services/tts
+        hostname: tts
+        ports:
+            - '8006:8006'
+        environment:
+            HF_TOKEN: ${HF_TOKEN}
+            TTS_MODEL: ${SERVICES__TTS_MODEL}
+            TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
+            TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
+            TTS_SPEED: ${SERVICES__TTS_SPEED}
+            <<: *hf-cache-env
+        volumes:
+            - *hf-cache-volume
+            - ./services/tts:/app
+        networks:
+            - rag-net
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 30s
+        profiles:
+            - audio
 
-  ollama:
-    <<: *gpu-reservation
-    image: ollama/ollama:latest
-    hostname: ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - rag-net
-    command: ["serve"]
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+    ollama:
+        <<: *gpu-reservation
+        image: ollama/ollama:latest
+        hostname: ollama
+        ports:
+            - '11434:11434'
+        volumes:
+            - ollama_data:/root/.ollama
+        networks:
+            - rag-net
+        command: ['serve']
+        healthcheck:
+            test: ['CMD', 'ollama', 'list']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 20s

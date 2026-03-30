@@ -43,20 +43,16 @@ def setup_logging(config: ObservabilityConfig) -> None:
     register custom domain levels, intercept stdlib logging."""
     logger.remove()
 
-    # Default extra so {extra[request_id]} never raises KeyError outside a
-    # contextualize() block (e.g. startup messages, background tasks)
     logger.configure(extra={"request_id": "-"})
 
     logger.add(sys.stderr, format=LOG_FORMAT, level=config.log_level, colorize=True)
 
-    # Register custom domain levels (idempotent — skip if already registered)
     for name, no, color in DOMAIN_LEVELS:
         try:
             logger.level(name, no=no, color=color)
         except (TypeError, ValueError):
-            pass  # already registered (loguru raises ValueError on duplicate name)
+            pass  
 
-    # Intercept stdlib logging → loguru (covers uvicorn, httpx, qdrant-client)
     logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
 
 

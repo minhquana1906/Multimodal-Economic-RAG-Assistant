@@ -61,7 +61,10 @@ def _make_config(
     rerank_top_n=5,
     fallback_min_chunks=3,
     fallback_score_threshold=0.5,
-    no_context_message="Xin lỗi, tôi không tìm thấy thông tin liên quan.",
+    web_fallback_min_chunks=None,
+    web_fallback_hard_threshold=0.7,
+    web_fallback_soft_threshold=0.85,
+    no_context_message="Không tìm thấy dữ liệu phù hợp trong tài liệu nội bộ hoặc nguồn web hiện có.",
     guard_error_message="Xin lỗi, yêu cầu của bạn không thể xử lý.",
     apology_message="Xin lỗi, tôi không thể trả lời câu hỏi này theo nội dung của chúng tôi.",
 ):
@@ -71,6 +74,13 @@ def _make_config(
     config.rag.rerank_top_n = rerank_top_n
     config.rag.fallback_min_chunks = fallback_min_chunks
     config.rag.fallback_score_threshold = fallback_score_threshold
+    config.rag.web_fallback_min_chunks = (
+        fallback_min_chunks
+        if web_fallback_min_chunks is None
+        else web_fallback_min_chunks
+    )
+    config.rag.web_fallback_hard_threshold = web_fallback_hard_threshold
+    config.rag.web_fallback_soft_threshold = web_fallback_soft_threshold
     config.rag.context_limit = 5
     config.rag.citation_limit = 5
     config.prompts = MagicMock()
@@ -430,6 +440,47 @@ async def test_generation_prompt_contains_context_ids_and_source_metadata():
 
 
 @pytest.mark.asyncio
+async def test_generation_prompt_includes_web_context_when_fallback_runs():
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [
+        {
+            "id": str(i),
+            "text": f"internal text {i}",
+            "source": f"internal{i}.local",
+            "title": f"Internal {i}",
+            "url": f"https://internal/{i}",
+            "score": 0.55 - (i * 0.01),
+        }
+        for i in range(5)
+    ]
+    reranked = [{"index": i, "score": 0.55 - (i * 0.01)} for i in range(5)]
+    web = [{
+        "context_id": "web:0",
+        "text": "Trường Đại học Thương mại là trường đại học công lập tại Hà Nội.",
+        "source": "tmu.edu.vn",
+        "title": "Giới thiệu chung về Trường Đại học Thương mại",
+        "url": "https://tmu.edu.vn/trang/gioi-thieu-chung-ve-dai-hoc-thuong-mai",
+        "score": 1.0,
+    }]
+
+    services = _make_services(
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        web_results=web,
+        llm_side_effect=["Answer with web [[cite:web:0]]"],
+    )
+    config = _make_config(fallback_min_chunks=10)
+    graph = build_rag_graph(services, config)
+
+    await graph.ainvoke(_initial_state(query="cho tôi biết thông tin về trường đại học thương mại"))
+
+    prompt = services.llm.generate.await_args_list[0].kwargs["user_prompt"]
+    assert "https://tmu.edu.vn/trang/gioi-thieu-chung-ve-dai-hoc-thuong-mai" in prompt
+    assert "Trường Đại học Thương mại là trường đại học công lập tại Hà Nội." in prompt
+
+
+@pytest.mark.asyncio
 async def test_rag_pipeline_text_mode_appends_structured_citation_footer():
     from orchestrator.pipeline.rag import build_rag_graph
 
@@ -643,7 +694,7 @@ async def test_rag_pipeline_unsafe_input_uses_category_reason():
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_no_context():
-    """No context: empty retrieval + no web results -> no_context_message, LLM not called."""
+    """No context: empty retrieval + no web results -> neutral no_context_message, LLM not called."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     services = _make_services(
@@ -657,12 +708,13 @@ async def test_rag_pipeline_no_context():
     result = await graph.ainvoke(_initial_state())
 
     assert result["answer"] == config.prompts.no_context_message
+    assert "Xin lỗi" not in result["answer"]
     services.llm.generate.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_web_fallback_triggered():
-    """Web fallback: 1 reranked doc < fallback_min_chunks=3 -> web search called."""
+    """Web fallback: soft-threshold + shallow support triggers web search."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -671,9 +723,9 @@ async def test_rag_pipeline_web_fallback_triggered():
         "source": "s",
         "title": "T",
         "url": "https://example.com/t",
-        "score": 0.9,
+        "score": 0.8,
     }]
-    reranked = [{"index": 0, "score": 0.9}]
+    reranked = [{"index": 0, "score": 0.8}]
     web = [{
         "text": "web content",
         "source": "web.com",
@@ -698,6 +750,155 @@ async def test_rag_pipeline_web_fallback_triggered():
     assert result["answer"].startswith("Answer with web")
     assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
     assert "- [Web](https://web.com/article) - **web.com (0.4200)**" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_web_fallback_uses_hard_threshold():
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [
+        {
+            "id": "1",
+            "text": "GDP text",
+            "source": "src.com",
+            "title": "GDP",
+            "url": "https://example.com/gdp",
+            "score": 0.69,
+        },
+        {
+            "id": "2",
+            "text": "supporting text",
+            "source": "src.com",
+            "title": "GDP support",
+            "url": "https://example.com/gdp-support",
+            "score": 0.6,
+        },
+    ]
+    reranked = [{"index": 0, "score": 0.69}, {"index": 1, "score": 0.68}]
+    web = [
+        {
+            "text": "web content",
+            "source": "web.com",
+            "title": "Web",
+            "url": "https://web.com/article",
+            "score": 0.88,
+        }
+    ]
+
+    services = _make_services(
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        web_results=web,
+        llm_side_effect=["Answer with web [[cite:web:0]]"],
+    )
+    config = _make_config(
+        fallback_min_chunks=1,
+        web_fallback_min_chunks=2,
+        web_fallback_hard_threshold=0.7,
+        web_fallback_soft_threshold=0.85,
+    )
+    graph = build_rag_graph(services, config)
+
+    result = await graph.ainvoke(_initial_state())
+
+    services.web_search.search.assert_awaited_once_with("GDP Việt Nam?")
+    assert any(item["source_type"] == "web" for item in result["final_context"])
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_web_fallback_uses_soft_threshold_when_support_is_shallow():
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [
+        {
+            "id": "1",
+            "text": "GDP text",
+            "source": "src.com",
+            "title": "GDP",
+            "url": "https://example.com/gdp",
+            "score": 0.8,
+        }
+    ]
+    reranked = [{"index": 0, "score": 0.8}]
+    web = [
+        {
+            "text": "web content",
+            "source": "web.com",
+            "title": "Web",
+            "url": "https://web.com/article",
+            "score": 0.88,
+        }
+    ]
+
+    services = _make_services(
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        web_results=web,
+        llm_side_effect=["Answer with web [[cite:web:0]]"],
+    )
+    config = _make_config(
+        fallback_min_chunks=1,
+        web_fallback_min_chunks=2,
+        web_fallback_hard_threshold=0.7,
+        web_fallback_soft_threshold=0.85,
+    )
+    graph = build_rag_graph(services, config)
+
+    await graph.ainvoke(_initial_state())
+
+    services.web_search.search.assert_awaited_once_with("GDP Việt Nam?")
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_skips_web_fallback_when_internal_evidence_is_strong():
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [
+        {
+            "id": "1",
+            "text": "GDP text",
+            "source": "src.com",
+            "title": "GDP",
+            "url": "https://example.com/gdp",
+            "score": 0.9,
+        },
+        {
+            "id": "2",
+            "text": "supporting text",
+            "source": "src.com",
+            "title": "GDP support",
+            "url": "https://example.com/gdp-support",
+            "score": 0.87,
+        },
+    ]
+    reranked = [{"index": 0, "score": 0.9}, {"index": 1, "score": 0.87}]
+
+    services = _make_services(
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        web_results=[
+            {
+                "text": "web content",
+                "source": "web.com",
+                "title": "Web",
+                "url": "https://web.com/article",
+                "score": 0.88,
+            }
+        ],
+        llm_side_effect=["Answer with docs [[cite:hybrid:1]]"],
+    )
+    config = _make_config(
+        fallback_min_chunks=1,
+        web_fallback_min_chunks=2,
+        web_fallback_hard_threshold=0.7,
+        web_fallback_soft_threshold=0.85,
+    )
+    graph = build_rag_graph(services, config)
+
+    result = await graph.ainvoke(_initial_state())
+
+    services.web_search.search.assert_not_called()
+    assert all(item["source_type"] != "web" for item in result["final_context"])
 
 
 @pytest.mark.asyncio

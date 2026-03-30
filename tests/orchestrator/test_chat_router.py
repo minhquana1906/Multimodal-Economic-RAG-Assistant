@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from orchestrator.routers.chat import create_chat_router, execute_chat_turn
+from orchestrator.models.schemas import Message
 
 
 def _make_app(
@@ -18,7 +20,14 @@ def _make_app(
     mock_graph = MagicMock()
     mock_graph.ainvoke = AsyncMock(return_value=rag_result)
     mock_task_llm = MagicMock()
-    mock_task_llm.complete_prompt = AsyncMock(return_value=task_result)
+
+    async def _complete_prompt(prompt: str) -> str:
+        if "Bạn là bộ chuẩn hóa truy vấn cho hệ thống RAG." in prompt:
+            match = re.search(r"Câu hỏi gốc:\n(?P<query>.+)", prompt)
+            return match.group("query").strip() if match else "GDP Việt Nam?"
+        return task_result
+
+    mock_task_llm.complete_prompt = AsyncMock(side_effect=_complete_prompt)
 
     app = FastAPI()
     app.include_router(create_chat_router(mock_graph, mock_task_llm))
@@ -61,7 +70,7 @@ async def test_chat_endpoint_non_streaming():
     assert data["choices"][0]["message"]["content"] == "GDP tăng 7%"
     assert data["choices"][0]["message"]["role"] == "assistant"
     mock_graph.ainvoke.assert_awaited_once()
-    mock_task_llm.complete_prompt.assert_not_called()
+    mock_task_llm.complete_prompt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -445,3 +454,27 @@ async def test_execute_chat_turn_returns_compact_trace_output():
         "task_type": "chat",
         "resolved_query": "GDP Việt Nam?",
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_chat_turn_rewrites_every_query_before_graph_call():
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value={"answer": "ok", "citations": []})
+    mock_task_llm = MagicMock()
+    mock_task_llm.complete_prompt = AsyncMock(
+        return_value="Trái phiếu doanh nghiệp tại Việt Nam đang chịu tác động thế nào?"
+    )
+
+    result = await execute_chat_turn(
+        mock_graph,
+        mock_task_llm,
+        messages=[Message(role="user", content="còn trái phiếu dn thì sao")],
+        max_tokens=None,
+    )
+
+    state = mock_graph.ainvoke.await_args.args[0]
+    assert (
+        state["resolved_query"]
+        == "Trái phiếu doanh nghiệp tại Việt Nam đang chịu tác động thế nào?"
+    )
+    assert result["resolved_query"] == state["resolved_query"]

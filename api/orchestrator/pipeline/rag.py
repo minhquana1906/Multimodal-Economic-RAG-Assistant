@@ -41,6 +41,20 @@ Yêu cầu định dạng câu trả lời:
 - Không dùng markdown, bullet point, header, hay danh sách.
 - Không mở đầu vòng vo, không kết thúc bằng câu mời gọi kéo dài hội thoại.
 """.strip()
+_TIME_SENSITIVE_MARKERS = (
+    "hôm nay",
+    "hiện tại",
+    "mới nhất",
+    "gần đây",
+    "cập nhật",
+    "latest",
+    "today",
+    "current",
+    "recent",
+    "năm nay",
+    "tháng này",
+    "quý này",
+)
 
 
 class RAGState(TypedDict):
@@ -176,6 +190,58 @@ def _format_citation_line(item: dict) -> str:
     return f"- {title_part} - **{source} ({score:.4f})**"
 
 
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())
+
+
+def _is_time_sensitive_query(query: str) -> bool:
+    normalized = " ".join(query.lower().split())
+    return any(marker in normalized for marker in _TIME_SENSITIVE_MARKERS)
+
+
+def _material_query_expansion(raw_query: str, resolved_query: str) -> bool:
+    raw_tokens = _tokenize(raw_query)
+    resolved_tokens = _tokenize(resolved_query)
+    if not raw_tokens or not resolved_tokens:
+        return False
+
+    extra_tokens = [token for token in resolved_tokens if token not in set(raw_tokens)]
+    return len(extra_tokens) >= 4 and len(resolved_tokens) >= len(raw_tokens) + 4
+
+
+def _has_shallow_internal_support(reranked_docs: list[dict], config) -> bool:
+    if len(reranked_docs) < config.rag.web_fallback_min_chunks:
+        return True
+    if len(reranked_docs) < 2:
+        return True
+
+    top_score = float(reranked_docs[0].get("score", 0.0) or 0.0)
+    second_score = float(reranked_docs[1].get("score", 0.0) or 0.0)
+    return (
+        second_score < config.rag.web_fallback_hard_threshold
+        or (top_score - second_score) >= 0.12
+    )
+
+
+def _should_add_web_fallback(state: RAGState, config) -> bool:
+    reranked_docs = state.get("reranked_docs", [])
+    if not reranked_docs:
+        return True
+
+    top_score = float(reranked_docs[0].get("score", 0.0) or 0.0)
+    if top_score < config.rag.web_fallback_hard_threshold:
+        return True
+    if top_score >= config.rag.web_fallback_soft_threshold:
+        return False
+    if _has_shallow_internal_support(reranked_docs, config):
+        return True
+    if _is_time_sensitive_query(_resolved_query(state)):
+        return True
+    if _material_query_expansion(_raw_query(state), _resolved_query(state)):
+        return True
+    return False
+
+
 def _build_generation_prompt(state: RAGState, config) -> str:
     response_instructions = (
         AUDIO_RESPONSE_INSTRUCTIONS
@@ -198,7 +264,14 @@ def _build_generation_prompt(state: RAGState, config) -> str:
     if state.get("conversation_context"):
         context_sections.append(state["conversation_context"])
     context_sections.append(response_instructions)
-    context_sections.append("Hãy trả lời dựa trên các nguồn được cung cấp.")
+    context_sections.append(
+        "Quy tắc trả lời:\n"
+        "- Ưu tiên tài liệu nội bộ khi đã đủ thông tin.\n"
+        "- Nếu tài liệu nội bộ chưa đủ, dùng thêm nguồn web được cung cấp.\n"
+        "- Không dùng lời xin lỗi mặc định chỉ vì thiếu dữ liệu.\n"
+        "- Nếu mọi nguồn đều chưa đủ, nêu rõ là chưa tìm thấy dữ liệu phù hợp.\n"
+        "- Không khẳng định các ý không có trong nguồn được cung cấp."
+    )
     if retrieved_context:
         context_sections.append(retrieved_context)
 
@@ -280,13 +353,7 @@ def build_rag_graph(services, config):
         return {"reranked_docs": ranked}
 
     async def web_fallback_node(state: RAGState) -> dict:
-        needs_fallback = len(
-            state["reranked_docs"]
-        ) < config.rag.fallback_min_chunks or (
-            state["reranked_docs"]
-            and state["reranked_docs"][0]["score"] < config.rag.fallback_score_threshold
-        )
-        if needs_fallback:
+        if _should_add_web_fallback(state, config):
             web_results = await services.web_search.search(_resolved_query(state))
             return {"web_results": web_results}
         return {"web_results": []}
@@ -318,7 +385,8 @@ def build_rag_graph(services, config):
                     context_id=web_item.get("context_id", f"web:{rank}"),
                 )
             )
-        final_context = reranked + web_context
+        # When web fallback runs, surface web evidence first so it survives prompt truncation.
+        final_context = web_context + reranked if web_context else reranked
         citation_pool = {
             item["context_id"]: item for item in final_context if item.get("context_id")
         }

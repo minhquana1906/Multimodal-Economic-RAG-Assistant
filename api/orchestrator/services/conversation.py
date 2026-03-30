@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Any, Iterable
+
+from loguru import logger
 
 from orchestrator.models.schemas import Message
 
@@ -10,6 +12,13 @@ DEFAULT_SUMMARIZE_THRESHOLD = 6
 DEFAULT_RECENT_TURNS = 3
 DEFAULT_PROMPT_TOKEN_BUDGET = 512
 DEFAULT_RESERVED_COMPLETION_TOKENS = 256
+QUERY_REWRITE_INSTRUCTION = """
+Bạn là bộ chuẩn hóa truy vấn cho hệ thống RAG.
+Viết lại thành đúng 1 câu hỏi hoàn chỉnh bằng tiếng Việt.
+Giữ nguyên ý định người dùng, sửa chính tả nếu cần, làm rõ đại từ tham chiếu bằng ngữ cảnh liên quan.
+Không thêm thông tin mới ngoài hội thoại.
+Chỉ trả về đúng câu hỏi đã được viết lại, không giải thích thêm.
+""".strip()
 
 _AUXILIARY_TASK_PATTERNS = {
     "title": (
@@ -37,6 +46,13 @@ _CHAT_HISTORY_PATTERN = re.compile(
     r"<chat_history>\s*(?P<history>.*?)\s*</chat_history>",
     re.IGNORECASE | re.DOTALL,
 )
+_QUERY_NORMALIZATION_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    (r"\bdn\b", "doanh nghiệp"),
+    (r"\bttck\b", "thị trường chứng khoán"),
+    (r"\bko\b", "không"),
+    (r"\bkh\b", "khách hàng"),
+    (r"\bnhư nào\b", "như thế nào"),
+)
 
 
 def _content_to_text(message: Message) -> str:
@@ -61,6 +77,21 @@ def _non_system_messages(messages: Iterable[Message]) -> list[Message]:
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text.split()))
+
+
+def _normalize_query_text(text: str) -> str:
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return ""
+
+    normalized = cleaned
+    for pattern, replacement in _QUERY_NORMALIZATION_REPLACEMENTS:
+        normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+
+    normalized = normalized[0].upper() + normalized[1:] if normalized else normalized
+    if normalized and normalized[-1] not in ".?!":
+        normalized = f"{normalized}?"
+    return normalized
 
 
 def _looks_like_followup(raw_query: str) -> bool:
@@ -129,6 +160,104 @@ def build_conversation_context(summary: str, recent_turns: Iterable[Message]) ->
     return "\n\n".join(sections)
 
 
+def _dedupe_preserving_order(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_items: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        if not normalized:
+            continue
+        marker = normalized.casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique_items.append(normalized)
+    return unique_items
+
+
+def normalize_query_with_context(
+    raw_query: str,
+    summary: str,
+    recent_turns: Iterable[Message],
+) -> str:
+    normalized_query = _normalize_query_text(raw_query)
+    if not normalized_query:
+        return ""
+
+    recent_turns = list(recent_turns)
+    context_fragments: list[str] = []
+    if summary:
+        context_fragments.append(summary)
+
+    latest_user_turn = ""
+    for message in reversed(recent_turns):
+        if message.role != "user":
+            continue
+        candidate = _normalize_query_text(_content_to_text(message))
+        if candidate and candidate.casefold() != normalized_query.casefold():
+            latest_user_turn = candidate.rstrip("?")
+            break
+
+    if latest_user_turn:
+        context_fragments.append(latest_user_turn)
+
+    context_fragments = _dedupe_preserving_order(context_fragments)
+    if not context_fragments:
+        return normalized_query
+
+    context_text = "; ".join(
+        fragment.rstrip(".?!") for fragment in context_fragments if fragment.strip()
+    )
+    return f"{normalized_query} Ngữ cảnh liên quan: {context_text}."
+
+
+def build_query_rewrite_prompt(
+    raw_query: str,
+    summary: str,
+    recent_turns: Iterable[Message],
+) -> str:
+    sections = [QUERY_REWRITE_INSTRUCTION, f"Câu hỏi gốc:\n{raw_query.strip()}"]
+    if summary:
+        sections.append(f"Tóm tắt hội thoại liên quan:\n{summary.strip()}")
+
+    recent_history = _format_history_lines(recent_turns)
+    if recent_history:
+        sections.append(f"Các lượt hội thoại gần đây:\n{recent_history}")
+
+    sections.append(
+        "Viết lại thành đúng 1 câu hỏi hoàn chỉnh, đúng chính tả, rõ nghĩa, phù hợp cho retrieval và web search."
+    )
+    return "\n\n".join(section for section in sections if section)
+
+
+async def resolve_user_query(
+    *,
+    raw_query: str,
+    summary: str,
+    recent_turns: Iterable[Message],
+    llm: Any | None,
+    max_tokens: int | None = None,
+) -> str:
+    del max_tokens
+    fallback_query = normalize_query_with_context(raw_query, summary, recent_turns)
+    if not raw_query.strip():
+        return fallback_query
+    if llm is None:
+        return fallback_query
+
+    prompt = build_query_rewrite_prompt(raw_query, summary, recent_turns)
+    try:
+        rewritten_query = await llm.complete_prompt(prompt)
+    except Exception as exc:
+        logger.warning("Query rewrite failed, falling back to deterministic rewrite: {}", exc)
+        return fallback_query or _normalize_query_text(raw_query)
+
+    rewritten_query = _normalize_query_text(rewritten_query)
+    if rewritten_query:
+        return rewritten_query
+    return fallback_query or _normalize_query_text(raw_query)
+
+
 def rewrite_followup_query(
     raw_query: str,
     summary: str,
@@ -136,21 +265,8 @@ def rewrite_followup_query(
 ) -> str:
     recent_turns = list(recent_turns)
     if not recent_turns or not _looks_like_followup(raw_query):
-        return raw_query
-
-    context_blocks: list[str] = []
-    if summary:
-        context_blocks.append(f"Tóm tắt trước đó: {summary}")
-
-    recent_history = _format_history_lines(recent_turns)
-    if recent_history:
-        context_blocks.append(f"Lịch sử gần đây:\n{recent_history}")
-
-    context_text = "\n".join(context_blocks).strip()
-    if not context_text:
-        return raw_query
-
-    return f"{raw_query}\n\nNgữ cảnh hội thoại liên quan:\n{context_text}"
+        return _normalize_query_text(raw_query)
+    return normalize_query_with_context(raw_query, summary, recent_turns)
 
 
 def classify_task(messages: Iterable[Message], latest_user_message: str) -> str:

@@ -74,7 +74,6 @@ def create_app() -> FastAPI:
         app.include_router(create_audio_router(services.asr, services.tts))
         logger.info("RAG graph ready")
         yield
-        # graceful shutdown placeholder
 
     app = FastAPI(
         title="Multimodal RAG Orchestrator",
