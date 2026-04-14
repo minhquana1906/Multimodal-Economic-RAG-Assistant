@@ -18,7 +18,8 @@ from orchestrator.models.schemas import (
     ChatStreamChoice,
     ChatStreamChunk,
 )
-from orchestrator.pipeline.rag import RAGState, _build_denial_message
+from orchestrator.pipeline.rag import RAGState
+from orchestrator.pipeline.rag_guard import build_denial_message
 from orchestrator.services.conversation import (
     DEFAULT_PROMPT_TOKEN_BUDGET,
     DEFAULT_RECENT_TURNS,
@@ -188,7 +189,7 @@ async def _handle_general_chat(
     guard_result = await guard.check_input(conversation["resolved_query"])
     if guard_result["label"] != "safe":
         return {
-            "answer": _build_denial_message(
+            "answer": build_denial_message(
                 prompts.apology_message,
                 guard_result.get("categories", []),
             ),
@@ -204,7 +205,7 @@ async def _handle_general_chat(
             prompt=conversation["resolved_query"],
         )
         if output_guard_result["label"] != "safe":
-            answer = _build_denial_message(
+            answer = build_denial_message(
                 prompts.guard_error_message,
                 output_guard_result.get("categories", []),
             )
@@ -254,7 +255,7 @@ async def _handle_general_chat(
     if retry_guard["label"] == "safe":
         answer = retry_answer
     else:
-        answer = _build_denial_message(
+        answer = build_denial_message(
             prompts.guard_error_message,
             retry_guard.get("categories", []),
         )
