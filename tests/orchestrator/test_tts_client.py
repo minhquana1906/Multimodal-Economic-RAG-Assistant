@@ -10,7 +10,7 @@ async def test_tts_client_synthesize_returns_bytes():
     tts = TTSClient(url="http://tts:8006", timeout=60.0)
 
     mock_response = MagicMock()
-    mock_response.content = b"RIFF\x00\x00\x00\x00WAVEfmt "
+    mock_response.content = b"RIFF" + (b"\x00" * 40)
     mock_response.raise_for_status = MagicMock()
 
     mock_client = AsyncMock()
