@@ -84,8 +84,18 @@ def _make_config(
     config.rag.context_limit = 5
     config.rag.citation_limit = 5
     config.prompts = MagicMock()
-    config.prompts.system_prompt = "You are a test assistant."
-    config.prompts.user_template = "Context:\n{context}\n\nQuestion: {question}"
+    config.prompts.rag_system_prompt = "You are a test assistant."
+    config.prompts.rag_user_template = "Context:\n{context}\n\nQuestion: {question}"
+    config.prompts.rag_text_response_contract = (
+        "Trình bày bằng markdown rõ ràng, tự nhiên, dễ đọc. "
+        "Mặc định chia câu trả lời thành 2-4 phần chính với header `##`; tiêu đề do bạn tự đặt theo nội dung thay vì dùng mẫu cố định. "
+        "Ngăn cách các phần bằng một dòng `---`. "
+        "Trong từng phần, ưu tiên văn xuôi tự nhiên và giải thích chi tiết, rõ ràng hơn một chút so với trả lời quá ngắn. "
+        "Ưu tiên dùng gạch đầu dòng khi đang liệt kê ý, điều kiện, tác động, hoặc đối chiếu nguồn; không lạm dụng bullet point nếu đoạn văn sẽ tự nhiên hơn."
+    )
+    config.prompts.rag_audio_response_contract = (
+        "Trả lời bằng tiếng Việt trong một đoạn ngắn, tự nhiên như văn nói. Giữ văn nói tự nhiên, ấm áp, nhẹ nhàng."
+    )
     config.prompts.no_context_message = no_context_message
     config.prompts.guard_error_message = guard_error_message
     config.prompts.apology_message = apology_message
@@ -100,7 +110,7 @@ def _initial_state(query="GDP Việt Nam?"):
         "resolved_query": query,
         "conversation_summary": "",
         "conversation_context": "",
-        "task_type": "chat",
+        "task_type": "rag",
         "response_mode": "text",
         "input_safe": False,
         "embeddings": [],
@@ -263,7 +273,7 @@ async def test_rag_pipeline_uses_resolved_query_for_retrieval_and_guards():
 
 
 @pytest.mark.asyncio
-async def test_rag_pipeline_generation_prompt_uses_conversation_context_and_raw_query():
+async def test_rag_pipeline_generation_prompt_uses_conversation_context_and_resolved_query():
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -305,9 +315,15 @@ async def test_rag_pipeline_generation_prompt_uses_conversation_context_and_raw_
     )
     prompt = services.llm.generate.await_args.kwargs["user_prompt"]
     assert conversation_context in prompt
-    assert "Còn trái phiếu doanh nghiệp thì sao?" in prompt
-    assert "### Trả lời ngắn gọn" in prompt
-    assert "----" in prompt
+    assert "Trái phiếu doanh nghiệp ảnh hưởng thế nào đến thị trường vốn?" in prompt
+    assert "Còn trái phiếu doanh nghiệp thì sao?" not in prompt
+    assert "markdown" in prompt.lower()
+    assert "header `##`" in prompt
+    assert "tiêu đề do bạn tự đặt" in prompt
+    assert "`---`" in prompt
+    assert "Ưu tiên dùng gạch đầu dòng" in prompt
+    assert "### Trả lời ngắn gọn" not in prompt
+    assert "### Phân tích chính" not in prompt
 
 
 @pytest.mark.asyncio
@@ -436,7 +452,42 @@ async def test_generation_prompt_contains_context_ids_and_source_metadata():
     assert "hybrid:1" in prompt
     assert "https://example.com/gdp" in prompt
     assert "Source:" in prompt
-    assert "### Phân tích chính" in prompt
+    assert "header `##`" in prompt
+    assert "`---`" in prompt
+    assert "### Phân tích chính" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_generation_prompt_falls_back_to_natural_text_contract_when_config_is_blank():
+    from orchestrator.pipeline.rag import build_rag_graph
+
+    retrieved = [{
+        "id": "1",
+        "text": "GDP text",
+        "source": "src.com",
+        "title": "GDP",
+        "url": "https://example.com/gdp",
+        "score": 0.7,
+    }]
+    reranked = [{"index": 0, "score": 0.9}]
+
+    services = _make_services(
+        retrieved_docs=retrieved,
+        reranked=reranked,
+        llm_side_effect=["GDP tăng 7% [[cite:hybrid:1]]"],
+    )
+    config = _make_config(fallback_min_chunks=1)
+    config.prompts.rag_text_response_contract = ""
+    graph = build_rag_graph(services, config)
+
+    await graph.ainvoke(_initial_state())
+
+    prompt = services.llm.generate.await_args.kwargs["user_prompt"]
+    assert "markdown" in prompt.lower()
+    assert "header `##`" in prompt
+    assert "`---`" in prompt
+    assert "Ưu tiên dùng gạch đầu dòng" in prompt
+    assert "### Trả lời ngắn gọn" not in prompt
 
 
 @pytest.mark.asyncio

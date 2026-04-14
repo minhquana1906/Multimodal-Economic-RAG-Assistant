@@ -72,7 +72,7 @@ async def test_execute_chat_turn_root_output_excludes_generation_prompt():
 
     assert result["answer"] == "GDP tăng 7%"
     assert result["citations"] == [{"context_id": "hybrid:1"}]
-    assert result["task_type"] == "chat"
+    assert result["task_type"] == "rag"
     assert result["resolved_query"] == "GDP Việt Nam?"
     assert "generation_prompt" not in result
     assert "final_context" not in result

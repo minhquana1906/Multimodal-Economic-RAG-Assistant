@@ -23,20 +23,20 @@ _CITATION_PATTERN = re.compile(r"\[\[cite:([a-zA-Z0-9:_-]+)\]\]")
 TEXT_RESPONSE_INSTRUCTIONS = """
 Yêu cầu định dạng câu trả lời:
 - Trả lời bằng tiếng Việt.
-- Dùng đúng các section sau với header level 3:
-### Trả lời ngắn gọn
-### Phân tích chính
-- Ngăn cách các section bằng dòng ----
-- Ưu tiên bullet point ngắn gọn, mỗi bullet một ý.
-- Trả lời trực tiếp vào trọng tâm câu hỏi, không lan man.
-- Không thêm section rỗng.
-- Không dùng header level khác.
-- Không tự thêm mục kết luận dài dòng nếu không cần thiết.
+- Trình bày bằng markdown rõ ràng, tự nhiên, dễ đọc.
+- Mặc định chia câu trả lời thành 2-4 phần chính với header `##`; tiêu đề do bạn tự đặt theo nội dung thay vì dùng mẫu cố định.
+- Ngăn cách các phần bằng một dòng `---` để bố cục rõ ràng hơn.
+- Trong từng phần, ưu tiên văn xuôi tự nhiên và giải thích chi tiết, rõ ràng hơn một chút so với trả lời quá ngắn.
+- Ưu tiên dùng gạch đầu dòng khi đang liệt kê ý, điều kiện, tác động, hoặc đối chiếu nguồn; không lạm dụng bullet point nếu đoạn văn sẽ tự nhiên hơn.
+- Khi cần đối chiếu nguồn hoặc nêu giới hạn dữ liệu, hãy dành một phần riêng với header phù hợp do bạn tự đặt.
+- Văn phong học thuật nhưng dễ hiểu với người dùng phổ thông.
+- Không lan man, không khẳng định quá mức, không tạo mục rỗng không cần thiết.
 """.strip()
 AUDIO_RESPONSE_INSTRUCTIONS = """
 Yêu cầu định dạng câu trả lời:
 - Trả lời bằng tiếng Việt trong một đoạn ngắn.
 - Dùng văn nói tự nhiên, ngắn gọn, trực tiếp vào ý chính.
+- Giữ giọng văn nói tự nhiên, ấm áp, nhẹ nhàng.
 - Chỉ nên dài 1-3 câu ngắn.
 - Không dùng markdown, bullet point, header, hay danh sách.
 - Không mở đầu vòng vo, không kết thúc bằng câu mời gọi kéo dài hội thoại.
@@ -242,12 +242,36 @@ def _should_add_web_fallback(state: RAGState, config) -> bool:
     return False
 
 
+def _resolve_prompt_text(prompts, primary_name: str, fallback_name: str | None = None) -> str:
+    primary_value = getattr(prompts, primary_name, None)
+    if isinstance(primary_value, str) and primary_value.strip():
+        return primary_value
+    if fallback_name is not None:
+        fallback_value = getattr(prompts, fallback_name, None)
+        if isinstance(fallback_value, str) and fallback_value.strip():
+            return fallback_value
+    return ""
+
+
 def _build_generation_prompt(state: RAGState, config) -> str:
+    prompts = config.prompts
     response_instructions = (
-        AUDIO_RESPONSE_INSTRUCTIONS
+        _resolve_prompt_text(
+            prompts,
+            "rag_audio_response_contract",
+        )
         if _response_mode(state) == "audio"
-        else TEXT_RESPONSE_INSTRUCTIONS
+        else _resolve_prompt_text(
+            prompts,
+            "rag_text_response_contract",
+        )
     )
+    if not response_instructions:
+        response_instructions = (
+            AUDIO_RESPONSE_INSTRUCTIONS
+            if _response_mode(state) == "audio"
+            else TEXT_RESPONSE_INSTRUCTIONS
+        )
     retrieved_context = "\n\n".join(
         [
             (
@@ -260,24 +284,24 @@ def _build_generation_prompt(state: RAGState, config) -> str:
             for c in state["final_context"][: config.rag.context_limit]
         ]
     )
-    context_sections = []
-    if state.get("conversation_context"):
-        context_sections.append(state["conversation_context"])
-    context_sections.append(response_instructions)
-    context_sections.append(
-        "Quy tắc trả lời:\n"
-        "- Ưu tiên tài liệu nội bộ khi đã đủ thông tin.\n"
-        "- Nếu tài liệu nội bộ chưa đủ, dùng thêm nguồn web được cung cấp.\n"
-        "- Không dùng lời xin lỗi mặc định chỉ vì thiếu dữ liệu.\n"
-        "- Nếu mọi nguồn đều chưa đủ, nêu rõ là chưa tìm thấy dữ liệu phù hợp.\n"
-        "- Không khẳng định các ý không có trong nguồn được cung cấp."
-    )
-    if retrieved_context:
-        context_sections.append(retrieved_context)
+    conversation_context = state.get("conversation_context", "").strip()
+    conversation_context = conversation_context or "Ngữ cảnh hội thoại:\nKhông có."
 
-    return config.prompts.user_template.format(
-        context="\n\n".join(context_sections),
-        question=_raw_query(state),
+    user_template = _resolve_prompt_text(prompts, "rag_user_template", "user_template")
+    if "{conversation_context}" in user_template or "{response_contract}" in user_template:
+        return user_template.format(
+            conversation_context=conversation_context,
+            response_contract=response_instructions,
+            context=retrieved_context,
+            question=_resolved_query(state),
+        )
+
+    legacy_sections = [conversation_context, response_instructions]
+    if retrieved_context:
+        legacy_sections.append(retrieved_context)
+    return user_template.format(
+        context="\n\n".join(section for section in legacy_sections if section),
+        question=_resolved_query(state),
     )
 
 
@@ -400,8 +424,13 @@ def build_rag_graph(services, config):
             }
 
         user_prompt = _build_generation_prompt(state, config)
+        system_prompt = _resolve_prompt_text(
+            config.prompts,
+            "rag_system_prompt",
+            "system_prompt",
+        )
         answer = await services.llm.generate(
-            system_prompt=config.prompts.system_prompt,
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
         return {"answer": answer, "generation_prompt": user_prompt}
@@ -416,8 +445,13 @@ def build_rag_graph(services, config):
 
         if state.get("generation_prompt"):
             retry_prompt = _build_retry_prompt(state, guard_result)
+            system_prompt = _resolve_prompt_text(
+                config.prompts,
+                "rag_system_prompt",
+                "system_prompt",
+            )
             retry_answer = await services.llm.generate(
-                system_prompt=config.prompts.system_prompt,
+                system_prompt=system_prompt,
                 user_prompt=retry_prompt,
             )
             retry_guard_result = await services.guard.check_output(

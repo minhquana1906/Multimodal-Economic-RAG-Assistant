@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from orchestrator.config import PromptsConfig
 from orchestrator.routers.chat import create_chat_router, execute_chat_turn
 from orchestrator.models.schemas import Message
 
@@ -15,29 +16,45 @@ from orchestrator.models.schemas import Message
 def _make_app(
     rag_result: dict,
     task_result: str = "task result",
-) -> tuple[FastAPI, MagicMock, MagicMock]:
-    """Build a minimal FastAPI app with mocked RAG and auxiliary task handlers."""
+    general_result: str = "general result",
+) -> tuple[FastAPI, MagicMock, MagicMock, MagicMock, PromptsConfig]:
+    """Build a minimal FastAPI app with mocked RAG, auxiliary, and general chat handlers."""
     mock_graph = MagicMock()
     mock_graph.ainvoke = AsyncMock(return_value=rag_result)
     mock_task_llm = MagicMock()
+    mock_guard = MagicMock()
+    mock_guard.check_input = AsyncMock(
+        return_value={"label": "safe", "safe_label": "Safe", "categories": [], "refusal": None}
+    )
+    mock_guard.check_output = AsyncMock(
+        return_value={"label": "safe", "safe_label": "Safe", "categories": [], "refusal": "No"}
+    )
+    prompts = PromptsConfig()
 
-    async def _complete_prompt(prompt: str) -> str:
-        if "Bạn là bộ chuẩn hóa truy vấn cho hệ thống RAG." in prompt:
+    async def _complete_prompt(prompt: str, max_tokens: int | None = None) -> str:
+        del max_tokens
+        if "Bạn là bộ chuẩn hóa truy vấn" in prompt:
             match = re.search(r"Câu hỏi gốc:\n(?P<query>.+)", prompt)
             return match.group("query").strip() if match else "GDP Việt Nam?"
+        if "Chỉ trả về đúng một nhãn" in prompt:
+            lowered = prompt.lower()
+            if "lời chào" in lowered or "xin chào" in lowered:
+                return "general_chat"
+            return "rag"
         return task_result
 
     mock_task_llm.complete_prompt = AsyncMock(side_effect=_complete_prompt)
+    mock_task_llm.generate = AsyncMock(return_value=general_result)
 
     app = FastAPI()
-    app.include_router(create_chat_router(mock_graph, mock_task_llm))
-    return app, mock_graph, mock_task_llm
+    app.include_router(create_chat_router(mock_graph, mock_task_llm, mock_guard, prompts))
+    return app, mock_graph, mock_task_llm, mock_guard, prompts
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_non_streaming():
     """Non-streaming: returns canonical message.content payload."""
-    app, mock_graph, mock_task_llm = _make_app(
+    app, mock_graph, mock_task_llm, _, _ = _make_app(
         {
             "answer": "GDP tăng 7%",
             "citations": [
@@ -76,7 +93,7 @@ async def test_chat_endpoint_non_streaming():
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming():
     """Streaming: continues to emit delta.content chunks."""
-    app, _, _ = _make_app(
+    app, _, _, _, _ = _make_app(
         {
             "answer": "GDP tăng",
             "citations": [],
@@ -130,7 +147,7 @@ async def test_chat_endpoint_streaming():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_builds_backend_conversation_state():
-    app, mock_graph, _ = _make_app(
+    app, mock_graph, _, _, _ = _make_app(
         {"answer": "Trái phiếu chịu áp lực", "citations": []}
     )
 
@@ -157,7 +174,7 @@ async def test_chat_endpoint_builds_backend_conversation_state():
     assert response.status_code == 200
     state = mock_graph.ainvoke.await_args.args[0]
     assert state["raw_query"] == "Còn trái phiếu doanh nghiệp thì sao?"
-    assert state["task_type"] == "chat"
+    assert state["task_type"] == "rag"
     assert "Bất động sản đang ảnh hưởng" in state["conversation_context"]
     assert "Còn trái phiếu doanh nghiệp thì sao?" in state["resolved_query"]
     assert state["response_mode"] == "text"
@@ -165,7 +182,7 @@ async def test_chat_endpoint_builds_backend_conversation_state():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_passes_audio_response_mode_into_state():
-    app, mock_graph, _ = _make_app(
+    app, mock_graph, _, _, _ = _make_app(
         {"answer": "Giá đang tăng chậm lại.", "citations": []}
     )
 
@@ -189,7 +206,7 @@ async def test_chat_endpoint_passes_audio_response_mode_into_state():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_infers_audio_response_mode_from_modalities():
-    app, mock_graph, _ = _make_app(
+    app, mock_graph, _, _, _ = _make_app(
         {"answer": "Giá đang tăng chậm lại.", "citations": []}
     )
 
@@ -214,7 +231,7 @@ async def test_chat_endpoint_infers_audio_response_mode_from_modalities():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
-    app, _, _ = _make_app(
+    app, _, _, _, _ = _make_app(
         {
             "answer": "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**",
             "citations": [
@@ -258,7 +275,7 @@ async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming_matches_non_streaming_multiline_markdown():
     answer = "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**"
-    app, _, _ = _make_app(
+    app, _, _, _, _ = _make_app(
         {
             "answer": answer,
             "citations": [
@@ -306,7 +323,7 @@ async def test_chat_endpoint_streaming_matches_non_streaming_multiline_markdown(
 @pytest.mark.asyncio
 async def test_chat_endpoint_no_user_message_returns_400():
     """Returns 400 when messages contains no user-role message."""
-    app, _, _ = _make_app({"answer": "", "citations": []})
+    app, _, _, _, _ = _make_app({"answer": "", "citations": []})
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -367,7 +384,7 @@ async def test_chat_endpoint_bypasses_rag_for_auxiliary_tasks(
     task_prompt: str,
     task_result: str,
 ):
-    app, mock_graph, mock_task_llm = _make_app(
+    app, mock_graph, mock_task_llm, _, _ = _make_app(
         {"answer": "should not be used", "citations": []},
         task_result=task_result,
     )
@@ -393,7 +410,7 @@ async def test_chat_endpoint_bypasses_rag_for_auxiliary_tasks(
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_builds_auxiliary_history_from_messages():
-    app, mock_graph, mock_task_llm = _make_app(
+    app, mock_graph, mock_task_llm, _, _ = _make_app(
         {"answer": "should not be used", "citations": []},
         task_result="Thi truong von",
     )
@@ -430,6 +447,63 @@ async def test_chat_endpoint_builds_auxiliary_history_from_messages():
 
 
 @pytest.mark.asyncio
+async def test_chat_endpoint_bypasses_rag_for_general_chat():
+    app, mock_graph, mock_task_llm, mock_guard, _ = _make_app(
+        {"answer": "should not be used", "citations": []},
+        general_result="Mình có thể giúp bạn viết lại lời chào theo giọng lịch sự hơn.",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "multimodal-economic-rag",
+                "messages": [
+                    {"role": "user", "content": "Bạn có thể viết lại lời chào này cho lịch sự hơn không?"}
+                ],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == (
+        "Mình có thể giúp bạn viết lại lời chào theo giọng lịch sự hơn."
+    )
+    mock_graph.ainvoke.assert_not_called()
+    mock_guard.check_input.assert_awaited_once()
+    mock_guard.check_output.assert_awaited_once()
+    mock_task_llm.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_returns_safe_redirect_for_general_chat_live_facts():
+    app, mock_graph, mock_task_llm, mock_guard, prompts = _make_app(
+        {"answer": "should not be used", "citations": []},
+        general_result="should not be used",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "multimodal-economic-rag",
+                "messages": [{"role": "user", "content": "Thời tiết hôm nay thế nào?"}],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == prompts.general_chat_live_facts_message
+    mock_graph.ainvoke.assert_not_called()
+    mock_guard.check_input.assert_awaited_once()
+    mock_task_llm.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_chat_turn_returns_compact_trace_output():
     mock_graph = MagicMock()
     mock_graph.ainvoke = AsyncMock(
@@ -451,7 +525,7 @@ async def test_execute_chat_turn_returns_compact_trace_output():
     assert result == {
         "answer": "GDP tăng 7% [GDP](https://example.com/gdp)",
         "citations": [{"context_id": "hybrid:1"}],
-        "task_type": "chat",
+        "task_type": "rag",
         "resolved_query": "GDP Việt Nam?",
     }
 
@@ -478,3 +552,40 @@ async def test_execute_chat_turn_rewrites_every_query_before_graph_call():
         == "Trái phiếu doanh nghiệp tại Việt Nam đang chịu tác động thế nào?"
     )
     assert result["resolved_query"] == state["resolved_query"]
+
+
+@pytest.mark.asyncio
+async def test_execute_chat_turn_uses_rewritten_query_to_route_general_chat():
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value={"answer": "should not be used", "citations": []})
+    mock_task_llm = MagicMock()
+    mock_guard = MagicMock()
+    mock_guard.check_input = AsyncMock(
+        return_value={"label": "safe", "safe_label": "Safe", "categories": [], "refusal": None}
+    )
+    mock_guard.check_output = AsyncMock(
+        return_value={"label": "safe", "safe_label": "Safe", "categories": [], "refusal": "No"}
+    )
+    prompts = PromptsConfig()
+
+    async def _complete_prompt(prompt: str, max_tokens: int | None = None) -> str:
+        del max_tokens
+        if "Bạn là bộ chuẩn hóa truy vấn" in prompt:
+            return "Bạn có thể giúp mình viết lại một lời chào khách hàng theo giọng lịch sự hơn được không?"
+        return "rag"
+
+    mock_task_llm.complete_prompt = AsyncMock(side_effect=_complete_prompt)
+    mock_task_llm.generate = AsyncMock(return_value="Mình có thể giúp bạn viết lại lời chào đó.")
+
+    result = await execute_chat_turn(
+        mock_graph,
+        mock_task_llm,
+        messages=[Message(role="user", content="giúp mình với nhé")],
+        max_tokens=None,
+        guard=mock_guard,
+        prompts=prompts,
+    )
+
+    assert result["task_type"] == "general_chat"
+    assert "lời chào khách hàng" in result["resolved_query"]
+    mock_graph.ainvoke.assert_not_called()

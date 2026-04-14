@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from orchestrator.models.schemas import Message
 
 
@@ -134,6 +138,52 @@ def test_classify_task_identifies_auxiliary_prompt():
     )
 
     assert task_type == "title"
+
+
+@pytest.mark.asyncio
+async def test_classify_chat_route_marks_greeting_as_general_chat():
+    from orchestrator.services.conversation import classify_chat_route
+
+    task_type = await classify_chat_route(
+        resolved_query="Xin chào, hôm nay bạn khỏe không?",
+        conversation_context="",
+        llm=None,
+        classifier_prompt="unused",
+    )
+
+    assert task_type == "general_chat"
+
+
+@pytest.mark.asyncio
+async def test_classify_chat_route_marks_finance_query_as_rag():
+    from orchestrator.services.conversation import classify_chat_route
+
+    task_type = await classify_chat_route(
+        resolved_query="Trái phiếu doanh nghiệp tại Việt Nam đang chịu tác động thế nào trong bối cảnh thị trường vốn chịu áp lực?",
+        conversation_context="",
+        llm=None,
+        classifier_prompt="unused",
+    )
+
+    assert task_type == "rag"
+
+
+@pytest.mark.asyncio
+async def test_classify_chat_route_uses_llm_fallback_when_heuristics_are_ambiguous():
+    from orchestrator.services.conversation import classify_chat_route
+
+    llm = MagicMock()
+    llm.complete_prompt = AsyncMock(return_value="general_chat")
+
+    task_type = await classify_chat_route(
+        resolved_query="Bạn giúp mình với nhé?",
+        conversation_context="USER: Mình đang nhờ bạn chỉnh lại câu chào khách hàng.",
+        llm=llm,
+        classifier_prompt="Phân loại route cho truy vấn sau.\nQuery: {resolved_query}\nContext: {conversation_context}",
+    )
+
+    assert task_type == "general_chat"
+    llm.complete_prompt.assert_awaited_once()
 
 
 def test_build_auxiliary_history_falls_back_to_embedded_chat_history():

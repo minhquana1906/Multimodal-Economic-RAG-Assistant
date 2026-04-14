@@ -80,3 +80,10 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Auxiliary LLM generation error: {e}")
             return ""
+
+    async def warm_start(self) -> None:
+        """Send a minimal request to reduce first-token latency after startup."""
+        await self._create_completion(
+            [{"role": "user", "content": "ping"}],
+            max_tokens=1,
+        )

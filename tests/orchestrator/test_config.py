@@ -175,6 +175,12 @@ def test_prompts_config_defaults():
     assert "kinh tế" in cfg.system_prompt
     assert "{context}" in cfg.user_template
     assert "{question}" in cfg.user_template
+    assert "markdown" in cfg.rag_text_response_contract.lower()
+    assert "header `##`" in cfg.rag_text_response_contract
+    assert "tiêu đề do bạn tự đặt" in cfg.rag_text_response_contract
+    assert "Ưu tiên dùng gạch đầu dòng" in cfg.rag_text_response_contract
+    assert "`---`" in cfg.rag_text_response_contract
+    assert "### Trả lời ngắn gọn" not in cfg.rag_text_response_contract
     assert cfg.no_context_message.startswith("Không tìm thấy dữ liệu")
     assert cfg.apology_message.startswith("Xin lỗi")
     assert cfg.guard_error_message.startswith("Xin lỗi")

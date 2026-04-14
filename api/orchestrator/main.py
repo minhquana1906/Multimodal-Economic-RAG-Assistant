@@ -22,9 +22,19 @@ from orchestrator.services.tts import TTSClient
 from orchestrator.services.web_search import WebSearchClient
 
 
+def _looks_like_runtime_settings(settings) -> bool:
+    return all(
+        hasattr(settings, field)
+        for field in ("observability", "services", "llm")
+    )
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
+    if not _looks_like_runtime_settings(settings):
+        get_settings.cache_clear()
+        settings = get_settings()
     setup_logging(settings.observability)
     setup_langsmith(settings.observability)
 
@@ -70,7 +80,19 @@ def create_app() -> FastAPI:
             ),
         )
         rag_graph = build_rag_graph(services, settings)
-        app.include_router(create_chat_router(rag_graph, services.llm))
+        try:
+            await services.llm.warm_start()
+            logger.info("LLM warm-start completed")
+        except Exception as exc:
+            logger.warning(f"LLM warm-start failed, continuing startup: {exc}")
+        app.include_router(
+            create_chat_router(
+                rag_graph,
+                services.llm,
+                services.guard,
+                settings.prompts,
+            )
+        )
         app.include_router(create_audio_router(services.asr, services.tts))
         logger.info("RAG graph ready")
         yield

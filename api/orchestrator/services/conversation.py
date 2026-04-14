@@ -19,6 +19,19 @@ Giữ nguyên ý định người dùng, sửa chính tả nếu cần, làm rõ
 Không thêm thông tin mới ngoài hội thoại.
 Chỉ trả về đúng câu hỏi đã được viết lại, không giải thích thêm.
 """.strip()
+ROUTE_CLASSIFIER_PROMPT = """
+Bạn là bộ phân loại route hội thoại cho trợ lý đa năng.
+Chỉ trả về đúng một nhãn: rag hoặc general_chat.
+- Chọn rag nếu truy vấn liên quan đến kinh tế, tài chính, số liệu, doanh nghiệp, chính sách, thị trường, phân tích, so sánh, dự báo, hoặc cần grounding theo ngữ cảnh.
+- Chọn general_chat nếu là xã giao, meta-chat, hỏi khả năng trợ lý, hoặc yêu cầu broad assistant ngoài domain như viết lại câu, chỉnh wording, hỗ trợ giao tiếp chung.
+- Nếu không chắc, chọn rag.
+
+Truy vấn đã làm rõ:
+{resolved_query}
+
+Ngữ cảnh hội thoại:
+{conversation_context}
+""".strip()
 
 _AUXILIARY_TASK_PATTERNS = {
     "title": (
@@ -52,6 +65,71 @@ _QUERY_NORMALIZATION_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     (r"\bko\b", "không"),
     (r"\bkh\b", "khách hàng"),
     (r"\bnhư nào\b", "như thế nào"),
+)
+_GENERAL_CHAT_MARKERS = (
+    "xin chào",
+    "chào bạn",
+    "hello",
+    "hi ",
+    "cảm ơn",
+    "thank you",
+    "tạm biệt",
+    "bạn là ai",
+    "bạn tên gì",
+    "bạn làm được gì",
+    "bạn có thể làm gì",
+    "viết lại",
+    "chỉnh lại câu",
+    "sửa lại câu",
+    "soạn giúp",
+    "gợi ý lời chào",
+    "lời chào",
+    "dịch giúp",
+    "caption",
+)
+_RAG_DOMAIN_MARKERS = (
+    "kinh tế",
+    "tài chính",
+    "gdp",
+    "cpi",
+    "lạm phát",
+    "lãi suất",
+    "tỷ giá",
+    "thị trường",
+    "chứng khoán",
+    "cổ phiếu",
+    "trái phiếu",
+    "ngân hàng",
+    "bất động sản",
+    "doanh nghiệp",
+    "việt nam",
+    "fed",
+    "ecb",
+    "thuế",
+    "nợ công",
+    "tín dụng",
+    "xuất khẩu",
+    "nhập khẩu",
+    "chính sách tiền tệ",
+    "chính sách tài khóa",
+)
+_GENERAL_CHAT_LIVE_FACT_TOPICS = (
+    "thời tiết",
+    "nhiệt độ",
+    "tỉ số",
+    "lịch thi đấu",
+    "tin tức",
+    "news",
+)
+_GENERAL_CHAT_LIVE_FACT_TIME_MARKERS = (
+    "hôm nay",
+    "hiện tại",
+    "mới nhất",
+    "cập nhật",
+)
+_GENERAL_CHAT_LIVE_FACT_DIRECT_MARKERS = (
+    "ai là",
+    "đang là",
 )
 
 
@@ -215,8 +293,9 @@ def build_query_rewrite_prompt(
     raw_query: str,
     summary: str,
     recent_turns: Iterable[Message],
+    instruction: str = QUERY_REWRITE_INSTRUCTION,
 ) -> str:
-    sections = [QUERY_REWRITE_INSTRUCTION, f"Câu hỏi gốc:\n{raw_query.strip()}"]
+    sections = [instruction, f"Câu hỏi gốc:\n{raw_query.strip()}"]
     if summary:
         sections.append(f"Tóm tắt hội thoại liên quan:\n{summary.strip()}")
 
@@ -236,6 +315,7 @@ async def resolve_user_query(
     summary: str,
     recent_turns: Iterable[Message],
     llm: Any | None,
+    prompt_instruction: str = QUERY_REWRITE_INSTRUCTION,
     max_tokens: int | None = None,
 ) -> str:
     del max_tokens
@@ -245,7 +325,12 @@ async def resolve_user_query(
     if llm is None:
         return fallback_query
 
-    prompt = build_query_rewrite_prompt(raw_query, summary, recent_turns)
+    prompt = build_query_rewrite_prompt(
+        raw_query,
+        summary,
+        recent_turns,
+        instruction=prompt_instruction,
+    )
     try:
         rewritten_query = await llm.complete_prompt(prompt)
     except Exception as exc:
@@ -276,7 +361,77 @@ def classify_task(messages: Iterable[Message], latest_user_message: str) -> str:
         for task_type, patterns in _AUXILIARY_TASK_PATTERNS.items():
             if any(pattern in normalized for pattern in patterns):
                 return task_type
-    return "chat"
+    return "rag"
+
+
+def _looks_like_rag_query(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    return any(marker in normalized for marker in _RAG_DOMAIN_MARKERS)
+
+
+def _looks_like_general_chat(text: str) -> bool:
+    normalized = f" {' '.join(text.lower().split())} "
+    return any(marker in normalized for marker in _GENERAL_CHAT_MARKERS)
+
+
+def _normalize_route_label(text: str) -> str:
+    normalized = " ".join(text.lower().split())
+    if normalized == "general_chat":
+        return "general_chat"
+    if normalized == "rag":
+        return "rag"
+    return "rag"
+
+
+def build_route_classifier_prompt(
+    resolved_query: str,
+    conversation_context: str,
+    classifier_prompt: str = ROUTE_CLASSIFIER_PROMPT,
+) -> str:
+    safe_context = conversation_context.strip() or "Không có."
+    return classifier_prompt.format(
+        resolved_query=resolved_query.strip(),
+        conversation_context=safe_context,
+    )
+
+
+async def classify_chat_route(
+    *,
+    resolved_query: str,
+    conversation_context: str,
+    llm: Any | None,
+    classifier_prompt: str = ROUTE_CLASSIFIER_PROMPT,
+) -> str:
+    normalized_query = _normalize_query_text(resolved_query)
+    if _looks_like_rag_query(normalized_query):
+        return "rag"
+    if is_live_facts_general_chat_query(normalized_query):
+        return "general_chat"
+    if _looks_like_general_chat(normalized_query):
+        return "general_chat"
+    if llm is None:
+        return "rag"
+
+    prompt = build_route_classifier_prompt(
+        normalized_query,
+        conversation_context,
+        classifier_prompt=classifier_prompt,
+    )
+    try:
+        label = await llm.complete_prompt(prompt, max_tokens=8)
+    except Exception as exc:
+        logger.warning("Route classification failed, defaulting to rag: {}", exc)
+        return "rag"
+    return _normalize_route_label(label)
+
+
+def is_live_facts_general_chat_query(resolved_query: str) -> bool:
+    normalized = " ".join(resolved_query.lower().split())
+    if any(marker in normalized for marker in _GENERAL_CHAT_LIVE_FACT_DIRECT_MARKERS):
+        return True
+    has_topic = any(marker in normalized for marker in _GENERAL_CHAT_LIVE_FACT_TOPICS)
+    has_time = any(marker in normalized for marker in _GENERAL_CHAT_LIVE_FACT_TIME_MARKERS)
+    return has_topic and has_time
 
 
 def build_auxiliary_history(
