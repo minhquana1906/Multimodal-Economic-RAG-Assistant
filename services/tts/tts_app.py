@@ -1,12 +1,3 @@
-"""TTS Service — VieNeu-TTS with on-demand GPU loading.
-
-Endpoints:
-    GET  /health      — Readiness check (idle/loading/ok)
-    POST /synthesize  — Text → full WAV audio response
-    POST /stream      — Text → chunked SSE audio stream
-    POST /unload      — Explicit model unload to free VRAM
-"""
-
 import asyncio
 import base64
 import gc
@@ -30,7 +21,6 @@ from text_preprocessor import preprocess
 logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
-# ── Configuration ──────────────────────────────────────────────────────
 TTS_MODEL = os.getenv("TTS_MODEL", "pnnbao-ump/VieNeu-TTS-0.3B-q4-gguf")
 TTS_CODEC = os.getenv("TTS_CODEC", "neuphonic/distill-neucodec")
 IDLE_TIMEOUT_S = int(os.getenv("TTS_IDLE_TIMEOUT", "300"))
@@ -38,7 +28,6 @@ SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
 DEFAULT_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
 
 
-# ── On-Demand Model Manager ───────────────────────────────────────────
 class OnDemandModel:
     """Manages TTS model lifecycle: load on first request, unload after idle timeout."""
 
@@ -124,7 +113,6 @@ class OnDemandModel:
             pass  # Timer was reset by a new request
 
 
-# ── App Setup ──────────────────────────────────────────────────────────
 on_demand = OnDemandModel()
 
 
@@ -140,7 +128,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="TTS Service", lifespan=lifespan)
 
 
-# ── Request / Response Models ─────────────────────────────────────────
 class SynthesizeRequest(BaseModel):
     text: str
     speed: float = Field(
@@ -159,7 +146,6 @@ class SynthesizeRequest(BaseModel):
     )
 
 
-# ── Helpers ───────────────────────────────────────────────────────────
 def _ensure_numpy(audio) -> np.ndarray:
     """Convert model output to a 1-D float32 numpy array.
 
@@ -213,7 +199,6 @@ def _resample_if_needed(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.n
         return audio
 
 
-# ── Health Endpoint ────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
     if on_demand.is_loaded:
@@ -223,7 +208,6 @@ async def health():
     return JSONResponse({"status": "idle", "model_loaded": False})
 
 
-# ── Synthesize Endpoint ───────────────────────────────────────────────
 @app.post("/synthesize")
 async def synthesize(req: SynthesizeRequest):
     """Synthesize full WAV audio from Vietnamese text."""
@@ -302,7 +286,6 @@ async def synthesize(req: SynthesizeRequest):
     )
 
 
-# ── Stream Endpoint (SSE) ─────────────────────────────────────────────
 @app.post("/stream")
 async def stream(req: SynthesizeRequest):
     """Stream audio chunks as SSE events, one per sentence."""
@@ -364,7 +347,6 @@ async def stream(req: SynthesizeRequest):
     )
 
 
-# ── Unload Endpoint ────────────────────────────────────────────────────
 @app.post("/unload")
 async def unload():
     """Explicitly unload model to free VRAM (used by orchestrator before ASR)."""

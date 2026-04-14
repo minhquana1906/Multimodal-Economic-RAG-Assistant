@@ -1,11 +1,3 @@
-"""ASR Service — Qwen3-ASR-1.7B with on-demand GPU loading.
-
-Endpoints:
-    GET  /health      — Readiness check (idle/loading/ok)
-    POST /transcribe  — Audio → text transcription
-    POST /unload      — Explicit model unload to free VRAM
-"""
-
 import asyncio
 import gc
 import io
@@ -24,14 +16,13 @@ from pydantic import BaseModel
 logger.remove()
 logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
 
-# ── Configuration ──────────────────────────────────────────────────────
 MODEL_NAME = os.getenv("ASR_MODEL", "Qwen/Qwen3-ASR-1.7B")
 MAX_DURATION_S = int(os.getenv("ASR_MAX_DURATION_S", "60"))
 IDLE_TIMEOUT_S = int(os.getenv("ASR_IDLE_TIMEOUT", "300"))
 TARGET_SAMPLE_RATE = 16_000
+SUPPORTED_FORMATS = {"audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/flac"}
 
 
-# ── On-Demand Model Manager ───────────────────────────────────────────
 class OnDemandModel:
     """Manages model lifecycle: load on first request, unload after idle timeout."""
 
@@ -115,7 +106,6 @@ class OnDemandModel:
             pass  # Timer was reset by a new request
 
 
-# ── App Setup ──────────────────────────────────────────────────────────
 on_demand = OnDemandModel()
 
 
@@ -131,7 +121,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ASR Service", lifespan=lifespan)
 
 
-# ── Health Endpoint ────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
     if on_demand.is_loaded:
@@ -141,8 +130,6 @@ async def health():
     return JSONResponse({"status": "idle", "model_loaded": False})
 
 
-# ── Audio Decoding ─────────────────────────────────────────────────────
-SUPPORTED_FORMATS = {"audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg", "audio/webm", "audio/flac"}
 
 
 def _decode_audio(audio_bytes: bytes) -> tuple[torch.Tensor, int]:
@@ -160,14 +147,12 @@ def _decode_audio(audio_bytes: bytes) -> tuple[torch.Tensor, int]:
     return waveform, sr
 
 
-# ── Response Models ────────────────────────────────────────────────────
 class TranscribeResponse(BaseModel):
     text: str
     language: str
     duration_seconds: float
 
 
-# ── Transcribe Endpoint ───────────────────────────────────────────────
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe(
     file: UploadFile = File(...),
@@ -228,7 +213,6 @@ async def transcribe(
     return TranscribeResponse(text=text, language=language, duration_seconds=round(duration_s, 2))
 
 
-# ── Unload Endpoint ────────────────────────────────────────────────────
 @app.post("/unload")
 async def unload():
     """Explicitly unload model to free VRAM (used by orchestrator before TTS)."""

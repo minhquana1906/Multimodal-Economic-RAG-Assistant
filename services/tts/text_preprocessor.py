@@ -1,19 +1,9 @@
-"""Vietnamese text preprocessor for TTS synthesis.
-
-Handles:
-    - Number normalization (integers, decimals, percentages, years, quarters)
-    - Abbreviation expansion (economic/financial terms)
-    - Markdown/citation/URL cleanup
-    - Sentence splitting for chunked synthesis
-"""
-
 from __future__ import annotations
 
 import re
 
 from abbreviations import ECONOMIC_ABBREVIATIONS
 
-# ── Vietnamese digit names ────────────────────────────────────────────
 
 _DIGITS = [
     "không", "một", "hai", "ba", "bốn",
@@ -21,7 +11,6 @@ _DIGITS = [
 ]
 
 
-# ── Internal helpers ──────────────────────────────────────────────────
 
 def _read_two_digits(n: int) -> str:
     """Read a two-digit number (10–99) in Vietnamese."""
@@ -79,7 +68,6 @@ def _read_integer(n: int) -> str:
     if n < 1_000:
         return _read_three_digits(n)
 
-    # Break into groups: tỷ (10^9), triệu (10^6), nghìn (10^3), đơn vị
     parts: list[str] = []
 
     ty, remainder = divmod(n, 1_000_000_000)
@@ -90,7 +78,6 @@ def _read_integer(n: int) -> str:
     if trieu > 0:
         parts.append(_read_three_digits(trieu) + " triệu")
     elif ty > 0 and (remainder > 0 or trieu == 0):
-        # Zero group placeholder so listener distinguishes scale
         if remainder > 0:
             parts.append("không triệu")
 
@@ -101,7 +88,6 @@ def _read_integer(n: int) -> str:
         parts.append("không nghìn")
 
     if don_vi > 0:
-        # If don_vi < 100 and there are higher groups, we need "không trăm ..."
         if (ty > 0 or trieu > 0 or nghin > 0) and don_vi < 100:
             if don_vi < 10:
                 parts.append("không trăm lẻ " + _DIGITS[don_vi])
@@ -115,19 +101,8 @@ def _read_integer(n: int) -> str:
     return " ".join(parts)
 
 
-# ── Public API ────────────────────────────────────────────────────────
 
 def normalize_numbers(text: str) -> str:
-    """Convert numeric tokens in *text* to Vietnamese words.
-
-    Handles:
-        - Percentages: ``6.5%`` → ``sáu phẩy năm phần trăm``
-        - Quarter/year: ``Q3/2023`` → ``quý ba năm hai nghìn ...``
-        - Decimals: ``3.14`` → ``ba phẩy mười bốn``
-        - Integers with thousand separators: ``1,000,000`` → ``một triệu``
-        - Plain integers
-    """
-
     # Percentages (decimal or integer)
     def _pct(m: re.Match) -> str:
         num = m.group(1)

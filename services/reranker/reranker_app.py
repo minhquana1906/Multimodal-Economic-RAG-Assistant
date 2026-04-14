@@ -145,8 +145,6 @@ async def rerank(request: RerankRequest):
 
     effective_instruction = request.instruction or INSTRUCTION
 
-    # Note: passages are scored sequentially. For high-throughput production,
-    # consider batching all passages in a single forward pass.
     scores = await asyncio.to_thread(
         _run_rerank,
         request.query,

@@ -1,10 +1,3 @@
-"""ASR Client — sends audio to ASR service for transcription.
-
-Follows the project pattern: httpx async client, @traceable, fail-closed.
-Unlike GuardClient (which fail-closes to False), ASRClient raises ASRError
-because a failed transcription means the request cannot proceed.
-"""
-
 from __future__ import annotations
 
 import time

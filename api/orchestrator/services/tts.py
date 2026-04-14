@@ -1,10 +1,3 @@
-"""TTS Client — sends text to TTS service for speech synthesis.
-
-Follows the project pattern: httpx async client, @traceable, fail-open.
-Unlike ASRClient (which raises on failure), TTSClient returns None on error
-because a failed synthesis allows graceful fallback to a text-only response.
-"""
-
 from __future__ import annotations
 
 import time
