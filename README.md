@@ -1,65 +1,258 @@
 # Multimodal Economic RAG Assistant
 
-OpenAI-compatible multimodal RAG stack for Vietnamese economic news. The repository contains:
+An OpenAI-compatible multimodal RAG system for Vietnamese economic and financial queries.
 
-- an orchestration API in [`api/`](api),
-- retrieval and safety services in [`services/`](services),
-- a data ingestion pipeline in [`scripts/`](scripts),
-- Docker Compose manifests for local development and image-based deployment.
+This repository combines:
 
-The practical way to run this project is Docker-first. Local Python dependencies are still useful for tests, quick API work, and ingestion debugging.
+- a FastAPI orchestration layer in `api/`
+- retrieval, ranking, safety, ASR, and TTS microservices in `services/`
+- a dataset ingestion pipeline in `scripts/`
+- Docker Compose environments for development and image-based deployment
 
-## 1. Run Modes
+The project is Docker-first for runtime, but local Python tooling is still useful for tests, API work, and ingestion debugging.
 
-This repo currently has 2 main Docker entrypoints:
+---
 
-- `docker-compose.dev.yaml`: local development stack that builds images from the source tree.
-- `docker-compose.yaml`: image-based deployment stack that pulls or uses prebuilt images from Docker Hub and expects an NVIDIA GPU host.
+## 1. What This Project Does
 
-There is also `docker-compose.yml.legacy`, which is only an archived older compose file.
+The stack is built around a retrieval-augmented generation workflow for Vietnamese economic content.
 
-## 2. Platform Support
+At a high level:
 
-### Linux (Ubuntu/Debian)
+1. the user sends a chat request to the orchestrator
+2. the orchestrator rewrites and classifies the query
+3. the query is checked by the safety service
+4. embeddings and sparse signals are used for retrieval
+5. retrieved passages are reranked
+6. the system optionally falls back to web search when internal support is weak
+7. the LLM generates an answer grounded in the assembled context
+8. the answer is checked again by the safety layer
+9. structured citations are appended for text responses
 
-This is the primary supported platform for the full stack.
+The repository also supports optional speech input/output with ASR and TTS services, plus a standalone ingestion workflow for building the Qdrant collection.
 
-- Recommended for full local runtime.
-- Required if you want to run the GPU-backed inference services directly on the same machine.
-- Install Docker Engine, Docker Compose plugin, and NVIDIA Container Toolkit if you have an NVIDIA GPU.
+---
+
+## 2. Repository Structure
+
+The main code layout is:
+
+```text
+.
+├── Makefile
+├── README.md
+├── api
+│   ├── Dockerfile
+│   ├── orchestrator
+│   │   ├── config.py
+│   │   ├── main.py
+│   │   ├── pipeline
+│   │   │   ├── rag.py
+│   │   │   ├── rag_context.py
+│   │   │   ├── rag_guard.py
+│   │   │   ├── rag_policy.py
+│   │   │   └── rag_prompts.py
+│   │   ├── routers
+│   │   │   ├── audio.py
+│   │   │   └── chat.py
+│   │   ├── services
+│   │   │   ├── asr.py
+│   │   │   ├── conversation.py
+│   │   │   ├── embedder.py
+│   │   │   ├── guard.py
+│   │   │   ├── llm.py
+│   │   │   ├── reranker.py
+│   │   │   ├── retriever.py
+│   │   │   ├── sparse_encoder.py
+│   │   │   ├── tts.py
+│   │   │   └── web_search.py
+│   │   └── tracing.py
+│   └── requirements.txt
+├── docker-compose.dev.yaml
+├── docker-compose.yaml
+├── docs
+│   └── diagrams
+├── pyproject.toml
+├── scripts
+│   ├── Dockerfile
+│   ├── chunker.py
+│   ├── ingest.py
+│   └── requirements.txt
+├── services
+│   ├── asr
+│   │   ├── Dockerfile
+│   │   ├── asr_app.py
+│   │   └── requirements.txt
+│   ├── embedding
+│   │   ├── Dockerfile
+│   │   ├── embedding_app.py
+│   │   └── requirements.txt
+│   ├── guard
+│   │   ├── Dockerfile
+│   │   ├── guard_app.py
+│   │   └── requirements.txt
+│   ├── reranker
+│   │   ├── Dockerfile
+│   │   ├── reranker_app.py
+│   │   └── requirements.txt
+│   └── tts
+│       ├── Dockerfile
+│       ├── abbreviations.py
+│       ├── text_preprocessor.py
+│       ├── tts_app.py
+│       └── requirements.txt
+└── tests
+    ├── orchestrator
+    ├── scripts
+    └── services
+```
+
+### Folder-by-folder overview
+
+#### `api/`
+
+Contains the orchestration API.
+
+- `main.py`: FastAPI app startup, service wiring, router registration
+- `config.py`: runtime configuration and prompt templates
+- `routers/chat.py`: OpenAI-compatible chat endpoint
+- `routers/audio.py`: speech-oriented endpoints
+- `services/`: clients for embedding, reranking, guard, ASR, TTS, retrieval, and web search
+- `pipeline/rag.py`: LangGraph workflow assembly
+- `pipeline/rag_prompts.py`: prompt-building logic for RAG responses
+- `pipeline/rag_policy.py`: web-fallback heuristics
+- `pipeline/rag_guard.py`: safety denial and retry helpers
+- `pipeline/rag_context.py`: context assembly and citation finalization
+
+#### `services/`
+
+Contains standalone inference services, each packaged as its own container.
+
+- `embedding/`: dense embedding service
+- `reranker/`: reranker service
+- `guard/`: safety classification and moderation service
+- `asr/`: speech-to-text service
+- `tts/`: text-to-speech service
+
+Each service has its own `Dockerfile` and `requirements.txt` because they are built and deployed independently.
+
+#### `scripts/`
+
+Contains the ingestion pipeline.
+
+- `ingest.py`: dataset loading, vector generation, and Qdrant upsert flow
+- `chunker.py`: chunking logic and chunk metadata conventions
+
+#### `tests/`
+
+Split by responsibility:
+
+- `tests/orchestrator/`: API, pipeline, config, client, and regression tests
+- `tests/services/`: service-container and service-behavior tests
+- `tests/scripts/`: ingestion and chunking tests
+
+#### `docs/`
+
+Project documentation and Mermaid diagrams for architecture and workflows.
+
+---
+
+## 3. Architecture Summary
+
+### Core runtime components
+
+- `orchestrator`: user-facing API and workflow coordinator
+- `qdrant`: vector database
+- `embedding`: dense query embedding service
+- `reranker`: passage reranking service
+- `guard`: safety classification for prompts and outputs
+- `webui`: Open WebUI configured against the orchestrator
+- `asr` and `tts`: optional audio services
+
+### Query flow
+
+1. The orchestrator receives a chat request.
+2. Conversation utilities normalize messages, resolve the latest user intent, and classify the route.
+3. Unsafe inputs are rejected early by the guard service.
+4. Dense embeddings and sparse signals are used for hybrid retrieval.
+5. Retrieved passages are reranked.
+6. If internal support is weak or the question is time-sensitive, web fallback may run.
+7. The orchestrator builds a grounded prompt from the final context.
+8. The LLM generates an answer.
+9. The output is safety-checked.
+10. Text responses get a structured citation footer.
+
+### Ingestion flow
+
+1. Load source documents
+2. Chunk documents into retrieval units
+3. Generate vectors and metadata
+4. Create or update the Qdrant collection
+5. Upsert chunks into Qdrant
+
+---
+
+## 4. Run Modes
+
+This repository has two main Docker entrypoints:
+
+- `docker-compose.dev.yaml`
+  - development stack
+  - builds containers from the local source tree
+  - intended for active development
+  - uses Ollama as the LLM backend in the current setup
+
+- `docker-compose.yaml`
+  - image-based deployment stack
+  - intended for machines where images are already available or prebuilt
+  - expects an NVIDIA GPU host
+  - uses the deployment-oriented service images and a vLLM-style OpenAI-compatible LLM endpoint
+
+Use `docker-compose.dev.yaml` for most local work. Use `docker-compose.yaml` when you want a deployment-like stack on a Linux GPU machine.
+
+---
+
+## 5. Platform Support
+
+### Linux
+
+Linux is the primary supported platform for the full stack.
+
+- recommended for full local runtime
+- required for realistic NVIDIA GPU deployment
+- best option for development plus service execution on one host
 
 ### Windows
 
-Use Windows 11 + Docker Desktop + WSL2.
+Windows is workable through Docker Desktop and WSL2.
 
-- Recommended shell: PowerShell for setup, WSL2 Ubuntu for daily development commands.
-- Full GPU-backed Docker runtime requires an NVIDIA GPU with WSL2 GPU support.
-- If you do not have NVIDIA GPU passthrough available, you can still run tests locally and connect the API to remote services.
+- recommended setup: Windows 11 + Docker Desktop + WSL2 Ubuntu
+- GPU-backed services require WSL2 GPU support
+- if GPU passthrough is unavailable, use Windows for development and tests, and point the orchestrator to remote services
 
 ### macOS
 
-macOS is fine for source code work, unit tests, and documentation updates, but not for the full GPU-backed inference stack in this repo.
+macOS is appropriate for code work, tests, and documentation, but not for the full GPU-backed inference stack in this repository.
 
-- Docker Desktop works for basic containers and tooling.
-- The current compose files expect NVIDIA GPU-backed services for embedding, reranking, guard, ASR, TTS, and model serving.
-- On macOS, the realistic workflow is:
-  - run unit tests locally,
-  - optionally run only lightweight services,
-  - or point the orchestrator to remote Linux GPU services.
+- local development and tests are fine
+- full model-serving compose workflows are not the target path
+- use a remote Linux GPU host if you need the full runtime
 
-## 3. Prerequisites
+---
 
-Install these first:
+## 6. Prerequisites
+
+Install the following first:
 
 - `git`
-- Docker with `docker compose`
+- Docker with the `docker compose` plugin
 - `uv`
 - Python 3.12 for local non-Docker workflows
 
-Useful official install pages:
+Useful references:
 
 - Docker Desktop: <https://docs.docker.com/desktop/>
-- Docker Engine (Linux): <https://docs.docker.com/engine/install/>
+- Docker Engine: <https://docs.docker.com/engine/install/>
 - Docker Compose plugin: <https://docs.docker.com/compose/install/>
 - NVIDIA Container Toolkit: <https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html>
 - `uv`: <https://docs.astral.sh/uv/getting-started/installation/>
@@ -78,9 +271,11 @@ Windows PowerShell:
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-## 4. Clone And Configure Environment
+---
 
-Clone the repository and create `.env` from the template:
+## 7. Clone And Configure
+
+Clone the repository and create a local `.env` file:
 
 macOS / Linux:
 
@@ -98,19 +293,35 @@ cd Multimodal-Economic-RAG-Assistant
 Copy-Item .env.example .env
 ```
 
-Minimum variables you should review in `.env`:
+### Important environment variables
 
-- `HF_TOKEN`: required for model downloads from Hugging Face.
-- `LLM__URL`: default in `.env.example` points to `ollama`, which matches `docker-compose.dev.yaml`.
-- `LLM__MODEL`: default is `qwen3:0.6b` for the local Ollama-based dev stack.
-- `SERVICES__QDRANT_COLLECTION`: default collection is `econ_vn_news`.
-- `OBSERVABILITY__LANGSMITH_API_KEY`: optional.
-- `OBSERVABILITY__TAVILY_API_KEY`: optional.
-- `CLOUDFLARE_TUNNEL_TOKEN`: optional unless you use the `tunnel` service.
+Review these first in `.env`:
 
-### Important: `docker-compose.yaml` needs extra variables
+- `HF_TOKEN`
+  - required for Hugging Face model downloads
 
-If you run the image-based compose file (`docker-compose.yaml`) instead of the dev compose file, update `.env` accordingly because it expects a vLLM-style OpenAI-compatible endpoint:
+- `LLM__URL`
+  - for the dev compose file, this should match the Ollama service
+  - for the deployment compose file, this should point to the OpenAI-compatible LLM endpoint
+
+- `LLM__MODEL`
+  - the active model name used by the orchestrator
+
+- `SERVICES__QDRANT_COLLECTION`
+  - default retrieval collection name
+
+- `OBSERVABILITY__LANGSMITH_API_KEY`
+  - optional, enables LangSmith tracing
+
+- `OBSERVABILITY__TAVILY_API_KEY`
+  - optional, enables web search support where configured
+
+- `CLOUDFLARE_TUNNEL_TOKEN`
+  - only needed if you use the tunnel service
+
+### Additional variables for `docker-compose.yaml`
+
+The image-based deployment stack expects deployment-oriented LLM variables. A typical setup looks like:
 
 ```env
 LLM__URL=http://llm:8004/v1
@@ -121,35 +332,42 @@ DOCKERHUB_NAMESPACE=your-dockerhub-namespace
 IMAGE_TAG=latest
 ```
 
-If you do not add the `VLLM_*` variables, `docker-compose.yaml` will not start cleanly.
+If those deployment variables are missing, `docker-compose.yaml` will not behave like the intended production-like environment.
 
-## 5. Install Local Python Dependencies
+---
 
-Use this when you want to run tests, inspect code, or work on the API without starting the whole Docker stack.
+## 8. Local Python Environment
 
-From the repository root:
+Use local Python dependencies when you want to:
+
+- run tests
+- work on the API without starting the whole stack
+- debug ingestion scripts
+- inspect imports and configuration locally
+
+Install the root development environment from the repository root:
 
 ```bash
 uv sync --dev
 ```
 
-This installs the root project dependencies declared in [`pyproject.toml`](pyproject.toml).
+This uses the dependencies declared in [`pyproject.toml`](pyproject.toml).
 
 ### Service-specific dependencies
 
-Some services also keep their own `requirements.txt` because they run in isolated Docker images:
+Some components keep separate `requirements.txt` files because they are packaged as isolated Docker services:
 
 - [`api/requirements.txt`](api/requirements.txt)
 - [`scripts/requirements.txt`](scripts/requirements.txt)
 - [`services/asr/requirements.txt`](services/asr/requirements.txt)
 - [`services/embedding/requirements.txt`](services/embedding/requirements.txt)
-- [`services/reranker/requirements.txt`](services/reranker/requirements.txt)
 - [`services/guard/requirements.txt`](services/guard/requirements.txt)
+- [`services/reranker/requirements.txt`](services/reranker/requirements.txt)
 - [`services/tts/requirements.txt`](services/tts/requirements.txt)
 
-If you want to run one of those components outside Docker, install that folder's requirements explicitly in that folder.
+If you want to run a component outside Docker, install that component's requirements directly.
 
-Example for the orchestrator API:
+Example for the orchestrator:
 
 ```bash
 cd api
@@ -158,7 +376,7 @@ uv pip install -r requirements.txt
 uv run uvicorn orchestrator.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Example for the ingestion script:
+Example for the ingestion pipeline:
 
 ```bash
 cd scripts
@@ -167,11 +385,13 @@ uv pip install -r requirements.txt
 uv run ingest.py
 ```
 
-## 6. Run The Local Development Stack
+---
 
-Use `docker-compose.dev.yaml` when you want Docker to build from the checked-out source code.
+## 9. Development Stack
 
-### Start the main stack
+Use `docker-compose.dev.yaml` when you want Docker to build directly from your checked-out source tree.
+
+### Start the main development stack
 
 ```bash
 docker compose -f docker-compose.dev.yaml up -d --build
@@ -185,10 +405,10 @@ make dev-ps
 make dev-logs
 ```
 
-Main services and ports:
+### Main services and ports
 
 - Orchestrator API: `http://localhost:8000`
-- OpenWebUI: `http://localhost:8080`
+- Open WebUI: `http://localhost:8080`
 - Qdrant HTTP: `http://localhost:6333`
 - Qdrant gRPC: `localhost:6334`
 - Embedding service: `http://localhost:8001`
@@ -198,13 +418,13 @@ Main services and ports:
 
 ### Pull the Ollama model after first startup
 
-The dev stack uses Ollama as the LLM backend. After the container is up, pull the model declared in `.env`.
+The dev stack uses Ollama as the LLM backend. After the container is running, pull the model declared in `.env`.
 
 ```bash
 docker compose -f docker-compose.dev.yaml exec ollama ollama pull qwen3:0.6b
 ```
 
-If you changed `LLM__MODEL`, pull that model instead.
+If you changed `LLM__MODEL`, pull that model name instead.
 
 ### Health checks
 
@@ -214,7 +434,7 @@ curl http://localhost:6333/collections
 curl http://localhost:11434/api/tags
 ```
 
-### Stop the dev stack
+### Stop the development stack
 
 ```bash
 docker compose -f docker-compose.dev.yaml down
@@ -226,9 +446,11 @@ Or:
 make dev-down
 ```
 
-## 7. Run Optional Audio Services
+---
 
-ASR and TTS are behind the `audio` profile.
+## 10. Optional Audio Services
+
+ASR and TTS are behind the `audio` profile in the development compose file.
 
 ```bash
 docker compose -f docker-compose.dev.yaml --profile audio up -d --build
@@ -245,14 +467,19 @@ Audio service ports:
 - ASR: `http://localhost:8005`
 - TTS: `http://localhost:8006`
 
-## 8. Run The Ingestion Pipeline
+---
 
-The ingestion pipeline:
+## 11. Ingestion Pipeline
 
-- loads the `khoalnd/EconVNNews` dataset,
-- chunks articles,
-- generates dense and sparse vectors,
-- upserts them into Qdrant.
+The ingestion workflow is responsible for building the Qdrant collection consumed by the orchestrator.
+
+The pipeline typically:
+
+- loads the source dataset
+- chunks source documents
+- generates vectors and metadata
+- creates or updates the target Qdrant collection
+- upserts chunk records into Qdrant
 
 ### Run ingestion in Docker
 
@@ -268,7 +495,7 @@ make dev-ingest
 
 ### Important ingestion settings
 
-From `.env`:
+Common variables from `.env`:
 
 - `SERVICES__QDRANT_URL=http://qdrant:6333`
 - `SERVICES__QDRANT_COLLECTION=econ_vn_news`
@@ -277,7 +504,7 @@ From `.env`:
 
 ### When to use `INGEST__FORCE_RECREATE=true`
 
-Set `INGEST__FORCE_RECREATE=true` when you intentionally want to destroy and rebuild the target Qdrant collection, for example after a chunking schema change.
+Set `INGEST__FORCE_RECREATE=true` when you intentionally want to destroy and rebuild the target collection, for example after a chunking schema change.
 
 Example:
 
@@ -285,11 +512,11 @@ Example:
 INGEST__FORCE_RECREATE=true docker compose -f docker-compose.dev.yaml --profile ingest up ingest
 ```
 
-This will recreate the Qdrant collection before re-ingesting. Do not use it casually on valuable data.
+Do not use that casually on valuable data.
 
-### Verify ingestion result
+### Verify ingestion results
 
-Check the collection list:
+List collections:
 
 ```bash
 curl http://localhost:6333/collections
@@ -301,30 +528,30 @@ Inspect collection metadata:
 curl http://localhost:6333/collections/econ_vn_news
 ```
 
-## 9. Run The Image-Based Deployment Stack
+---
+
+## 12. Image-Based Deployment Stack
 
 Use `docker-compose.yaml` when images already exist in Docker Hub or were built and tagged in advance.
 
 This mode is intended for a Linux NVIDIA GPU host.
 
-### Build and push images first
+### Build and push images
 
-If you are publishing your own images:
+If you publish your own service images:
 
 ```bash
 make images-build
 make images-push
 ```
 
-Or in one step:
+Or:
 
 ```bash
 make images-build-push
 ```
 
-### Start the image-based stack
-
-Use direct `docker compose` commands:
+### Start the deployment stack
 
 ```bash
 docker compose -f docker-compose.yaml up -d
@@ -342,20 +569,22 @@ Optional ingestion profile:
 docker compose -f docker-compose.yaml --profile ingest up ingest
 ```
 
-### Why direct `docker compose` is recommended here
+### Why direct `docker compose` is preferred here
 
-The current production-like compose file is `docker-compose.yaml`. The repo also keeps `docker-compose.yml.legacy` as an archived older file, so using explicit compose commands is clearer than depending on older helper targets.
+The current production-like compose file is `docker-compose.yaml`, and explicit compose commands make the active runtime target clear.
 
-## 10. Qdrant Snapshot Workflow
+---
 
-The local Qdrant service in this repo exposes its HTTP API on `http://localhost:6333`.
+## 13. Qdrant Snapshot Workflow
 
-The commands below assume:
+The local Qdrant service in this repository exposes its HTTP API on `http://localhost:6333`.
+
+The examples below assume:
 
 - collection name: `econ_vn_news`
-- no Qdrant API key is configured
+- no Qdrant API key
 
-If you enable an API key in your own deployment, add `-H "api-key: <your-key>"` to the `curl` requests below.
+If you enable a Qdrant API key, add the appropriate header to your requests.
 
 ### Create a snapshot
 
@@ -363,7 +592,7 @@ If you enable an API key in your own deployment, add `-H "api-key: <your-key>"` 
 curl -X POST "http://localhost:6333/collections/econ_vn_news/snapshots"
 ```
 
-### List available snapshots
+### List snapshots
 
 ```bash
 curl "http://localhost:6333/collections/econ_vn_news/snapshots"
@@ -371,13 +600,11 @@ curl "http://localhost:6333/collections/econ_vn_news/snapshots"
 
 ### Download a snapshot
 
-Replace `<snapshot-name>` with the value returned by the list or create call.
-
 ```bash
 curl -L "http://localhost:6333/collections/econ_vn_news/snapshots/<snapshot-name>" -o "./<snapshot-name>"
 ```
 
-### Upload and recover from a local snapshot file
+### Upload and recover from a snapshot file
 
 macOS / Linux:
 
@@ -394,11 +621,7 @@ curl.exe -X POST "http://localhost:6333/collections/econ_vn_news/snapshots/uploa
   -F "snapshot=@C:\path\to\econ_vn_news.snapshot"
 ```
 
-This overwrites the current collection contents with the uploaded snapshot. If the collection does not exist, Qdrant creates it during recovery.
-
 ### Recover from a snapshot URL or file URI
-
-If the snapshot file is already reachable by URL, or mounted where Qdrant can read it, use the recover endpoint:
 
 ```bash
 curl -X PUT "http://localhost:6333/collections/econ_vn_news/snapshots/recover?wait=true" \
@@ -409,7 +632,7 @@ curl -X PUT "http://localhost:6333/collections/econ_vn_news/snapshots/recover?wa
   }'
 ```
 
-You can also use an HTTP URL:
+Or from an HTTP URL:
 
 ```bash
 curl -X PUT "http://localhost:6333/collections/econ_vn_news/snapshots/recover?wait=true" \
@@ -422,59 +645,102 @@ curl -X PUT "http://localhost:6333/collections/econ_vn_news/snapshots/recover?wa
 
 ### Snapshot safety notes
 
-- Recovery overwrites collection data.
-- Restore into the correct collection name.
-- If you are testing a new dataset version, use a separate collection name first.
-- If the snapshot was created from a different chunking strategy, verify compatibility before mixing old and new ingestion runs.
+- recovery overwrites collection data
+- restore into the correct collection name
+- use a separate collection name first when testing a new dataset version
+- verify chunking compatibility before mixing old and new ingestion runs
 
-## 11. Test Workflow
+---
 
-The canonical local unit-test entrypoint for this repository is:
+## 14. Testing
+
+The canonical test entrypoint for this repository is:
 
 ```bash
 uv run pytest
 ```
 
-Matching shortcuts:
+Matching Make targets:
 
 ```bash
 make test
 make test-integration
 ```
 
-`integration` tests are opt-in and skipped by default in local runs:
+Integration tests are opt-in:
 
 ```bash
 uv run pytest -m integration
 ```
 
-## 12. What The Regression Matrix Covers
+### What the test layout covers
 
-`tests/orchestrator/test_regression_matrix.py` defines the baseline regression matrix for:
+- `tests/orchestrator/`
+  - config, routers, pipeline logic, service clients, tracing, regression checks
 
-- single-turn factual chat,
-- follow-up questions that depend on earlier turns,
-- sparse-sensitive keyword and entity-heavy retrieval cases,
-- no-context responses,
-- web-fallback queries,
-- citation-sensitive multiline answers where streaming must preserve inline markdown links.
+- `tests/services/`
+  - container-level expectations, service behavior, compose assumptions
 
-## 13. Troubleshooting
+- `tests/scripts/`
+  - ingestion logic and chunking behavior
 
-### Docker starts but model services never become healthy
+### Regression coverage
 
-Most likely causes:
+The orchestrator regression matrix includes cases such as:
 
-- `HF_TOKEN` is missing or invalid.
-- the model is too large for your GPU memory budget,
-- NVIDIA Container Toolkit is not installed correctly on Linux,
-- Docker Desktop on Windows does not have WSL2 GPU support enabled.
+- single-turn factual chat
+- follow-up questions that depend on earlier turns
+- sparse-sensitive keyword or entity-heavy retrieval
+- no-context responses
+- web-fallback behavior
+- citation-sensitive multiline answers where streaming must preserve inline markdown
+
+---
+
+## 15. Useful Commands
+
+### Development Make targets
+
+```bash
+make test
+make test-integration
+make dev-build
+make dev-build-up
+make dev-up
+make dev-down
+make dev-restart
+make dev-logs
+make dev-ps
+make dev-audio-up
+make dev-ingest
+```
+
+### Image publishing Make targets
+
+```bash
+make images-build
+make images-push
+make images-build-push
+```
+
+---
+
+## 16. Troubleshooting
+
+### Model services never become healthy
+
+Common causes:
+
+- `HF_TOKEN` is missing or invalid
+- the selected model is too large for available GPU memory
+- NVIDIA Container Toolkit is not configured correctly
+- Windows GPU support through WSL2 is not enabled
 
 ### macOS cannot run the full stack
 
-That is expected with the current compose files because they assume NVIDIA GPU containers. Use a remote Linux GPU host for the full stack.
+That is expected for the current GPU-oriented compose setup. Use macOS for development and tests, or point the orchestrator to remote Linux GPU services.
 
-### Orchestrator is healthy but responses fail
+### The orchestrator starts but answers fail
 
 Check:
 
@@ -483,9 +749,18 @@ Check:
 - whether the Ollama model was pulled in the dev stack
 - whether Qdrant contains data in `SERVICES__QDRANT_COLLECTION`
 
-### Re-ingestion fails with chunking/version mismatch
+### Re-ingestion fails because of chunking or version mismatch
 
-That is usually intentional protection from mixing old and new chunking layouts. Either:
+That usually means the ingestion pipeline is protecting you from mixing incompatible chunk layouts. Either:
 
 - ingest into a new collection name, or
-- rerun with `INGEST__FORCE_RECREATE=true` if you explicitly want to rebuild the collection.
+- rerun with `INGEST__FORCE_RECREATE=true` if you explicitly want to rebuild the collection
+
+---
+
+## 17. Notes For Contributors
+
+- Prefer Docker-based runtime testing for end-to-end behavior.
+- Use `uv run pytest` as the baseline local verification command.
+- Keep README examples aligned with the active compose files and Make targets.
+- When changing the retrieval pipeline, also review prompt contracts, web fallback logic, and citation behavior together.
