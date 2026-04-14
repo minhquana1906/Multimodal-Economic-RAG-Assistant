@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 DEV_COMPOSE := docker compose -f docker-compose.dev.yaml
-VAST_COMPOSE := docker compose -f docker-compose.vast.yaml
+COMPOSE := docker compose -f docker-compose.yaml
 SERVICE ?=
 DOCKERHUB_NAMESPACE ?= minhquan1906
 IMAGE_TAG ?= latest
@@ -53,24 +53,33 @@ dev-audio-up: dev-cache
 dev-ingest: dev-cache
 	$(DEV_COMPOSE) --profile ingest up ingest
 
-# VAST 
-vast-pull:
-	$(VAST_COMPOSE) pull
+# Main
+build:
+	$(COMPOSE) build $(SERVICE)
 
-vast-up:
-	$(VAST_COMPOSE) up -d
+build-up:
+	$(COMPOSE) up -d --build $(SERVICE)
 
-vast-audio-up:
-	$(VAST_COMPOSE) --profile audio up -d
+up:
+	$(COMPOSE) up -d
 
-vast-down:
-	$(VAST_COMPOSE) down
+down:
+	$(COMPOSE) down
 
-vast-logs:
-	$(VAST_COMPOSE) logs -f $(SERVICE)
+restart:
+	$(COMPOSE) restart $(SERVICE)
 
-vast-ps:
-	$(VAST_COMPOSE) ps
+logs:
+	$(COMPOSE) logs -f $(SERVICE)
+
+ps:
+	$(COMPOSE) ps
+
+audio-up: cache
+	$(COMPOSE) --profile audio up -d
+
+ingest: cache
+	$(COMPOSE) --profile ingest up ingest
 
 # Build and push images to Hub
 images-build:
