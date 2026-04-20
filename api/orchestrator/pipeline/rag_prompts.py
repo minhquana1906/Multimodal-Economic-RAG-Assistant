@@ -60,6 +60,36 @@ def _resolve_response_contract(prompts, response_mode: str) -> str:
     return contract or TEXT_RESPONSE_INSTRUCTIONS
 
 
+def build_rag_prompt(sources: list[dict]) -> str:
+    """Build a formatted context block with inline [S1], [S2], ... citation IDs.
+
+    Each source dict must have a 'source_id' key (e.g. 'S1') plus optional
+    'title', 'url', and 'text' fields. Returns the full prompt string including
+    citation instructions.
+    """
+    lines = []
+    for src in sources:
+        sid = src.get("source_id", "")
+        title = src.get("title", "") or "Nguồn"
+        url = src.get("url", "")
+        text = src.get("text", "")
+        header = f"[{sid}] {title}"
+        if url:
+            header = f"{header} | {url}"
+        lines.append(f"{header}\nContent: {text}")
+
+    context_block = "\n\n".join(lines)
+    citation_instructions = (
+        "Hướng dẫn trích dẫn:\n"
+        "- Trả lời bằng tiếng Việt.\n"
+        "- Trích dẫn inline bằng [S1], [S2], ... sau mỗi khẳng định có căn cứ.\n"
+        "- Có thể dùng nhiều ID liên tiếp: [S1][S2].\n"
+        "- Không tạo nguồn ngoài danh sách đã cung cấp.\n"
+        "- Không thêm danh sách nguồn cuối câu trả lời."
+    )
+    return f"{citation_instructions}\n\nNguồn đã gán ID:\n{context_block}"
+
+
 def _render_context_block(state: dict, context_limit: int) -> str:
     return "\n\n".join(
         (

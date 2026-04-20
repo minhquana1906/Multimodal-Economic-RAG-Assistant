@@ -19,6 +19,7 @@ from orchestrator.models.schemas import (
     ChatStreamChunk,
 )
 from orchestrator.pipeline.rag import RAGState
+from orchestrator.pipeline.rag_prompts import resolve_rag_system_prompt
 from orchestrator.services.conversation import extract_latest_user_query, normalize_messages
 
 
@@ -109,12 +110,6 @@ async def execute_chat_turn(
     }
 
 
-def _chunk_answer(answer: str, chunk_size: int = 64) -> list[str]:
-    if not answer:
-        return []
-    return [answer[index : index + chunk_size] for index in range(0, len(answer), chunk_size)]
-
-
 def create_chat_router(
     rag_graph,
     task_llm=None,
@@ -157,41 +152,56 @@ def create_chat_router(
                     ],
                 )
 
-            async def generate():
-                chunks = _chunk_answer(answer)
-                if chunks:
-                    first_chunk = ChatStreamChunk(
-                        model=request.model,
-                        choices=[
-                            ChatStreamChoice(
-                                delta=ChatDelta(
-                                    role="assistant",
-                                    content=chunks[0],
-                                ),
-                                finish_reason="stop" if len(chunks) == 1 else None,
-                            )
-                        ],
-                    )
-                    yield f"data: {first_chunk.model_dump_json(exclude_none=True)}\n\n"
+            # Build messages for streaming using resolved query
+            system_prompt = resolve_rag_system_prompt(prompts)
+            resolved_query = result.get("resolved_query") or user_message
+            stream_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": resolved_query},
+            ]
 
-                    for index, chunk_text in enumerate(chunks[1:], start=1):
-                        is_last = index == len(chunks) - 1
+            async def generate():
+                if task_llm is not None and hasattr(task_llm, "stream_chat"):
+                    is_first = True
+                    async for delta in task_llm.stream_chat(stream_messages):
+                        role = "assistant" if is_first else None
+                        is_first = False
                         chunk = ChatStreamChunk(
                             model=request.model,
                             choices=[
                                 ChatStreamChoice(
-                                    delta=ChatDelta(content=chunk_text),
-                                    finish_reason="stop" if is_last else None,
+                                    delta=ChatDelta(
+                                        role=role,
+                                        content=delta,
+                                    ),
                                 )
                             ],
                         )
                         yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
-                else:
                     stop_chunk = ChatStreamChunk(
                         model=request.model,
                         choices=[ChatStreamChoice(delta=ChatDelta(), finish_reason="stop")],
                     )
                     yield f"data: {stop_chunk.model_dump_json(exclude_none=True)}\n\n"
+                else:
+                    # Fallback: chunk the buffered answer
+                    if answer:
+                        first_chunk = ChatStreamChunk(
+                            model=request.model,
+                            choices=[
+                                ChatStreamChoice(
+                                    delta=ChatDelta(role="assistant", content=answer),
+                                    finish_reason="stop",
+                                )
+                            ],
+                        )
+                        yield f"data: {first_chunk.model_dump_json(exclude_none=True)}\n\n"
+                    else:
+                        stop_chunk = ChatStreamChunk(
+                            model=request.model,
+                            choices=[ChatStreamChoice(delta=ChatDelta(), finish_reason="stop")],
+                        )
+                        yield f"data: {stop_chunk.model_dump_json(exclude_none=True)}\n\n"
 
                 yield "data: [DONE]\n\n"
 

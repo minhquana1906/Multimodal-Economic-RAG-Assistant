@@ -17,6 +17,8 @@ def _make_app(
     rag_result: dict,
     task_result: str = "task result",
     general_result: str = "general result",
+    stream_tokens: list[str] | None = None,
+    detect_intent_route: str = "rag",
 ) -> tuple[FastAPI, MagicMock, MagicMock, MagicMock, PromptsConfig]:
     """Build a minimal FastAPI app with mocked RAG, auxiliary, and general chat handlers."""
     mock_graph = MagicMock()
@@ -45,6 +47,27 @@ def _make_app(
 
     mock_task_llm.complete_prompt = AsyncMock(side_effect=_complete_prompt)
     mock_task_llm.generate = AsyncMock(return_value=general_result)
+
+    # detect_intent uses the new routing flow
+    last_user_content = rag_result.get("_test_resolved_query", "")
+
+    async def _detect_intent(messages):
+        last = next(
+            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+            last_user_content,
+        )
+        return {"route": detect_intent_route, "resolved_query": last}
+
+    mock_task_llm.detect_intent = AsyncMock(side_effect=_detect_intent)
+
+    # stream_chat yields provided tokens or a single "stream result" token
+    _tokens = stream_tokens if stream_tokens is not None else ["stream result"]
+
+    async def _stream_chat(messages):
+        for token in _tokens:
+            yield token
+
+    mock_task_llm.stream_chat = _stream_chat
 
     app = FastAPI()
     app.include_router(create_chat_router(mock_graph, mock_task_llm, mock_guard, prompts))
@@ -87,17 +110,18 @@ async def test_chat_endpoint_non_streaming():
     assert data["choices"][0]["message"]["content"] == "GDP tăng 7%"
     assert data["choices"][0]["message"]["role"] == "assistant"
     mock_graph.ainvoke.assert_awaited_once()
-    mock_task_llm.complete_prompt.assert_awaited_once()
+    mock_task_llm.detect_intent.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming():
-    """Streaming: continues to emit delta.content chunks."""
+    """Streaming: continues to emit delta.content chunks via stream_chat."""
     app, _, _, _, _ = _make_app(
         {
             "answer": "GDP tăng",
             "citations": [],
-        }
+        },
+        stream_tokens=["GDP", " tăng"],
     )
 
     async with AsyncClient(
@@ -231,9 +255,11 @@ async def test_chat_endpoint_infers_audio_response_mode_from_modalities():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
+    """Streaming via stream_chat relays tokens without adding citation footer."""
+    expected = "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**"
     app, _, _, _, _ = _make_app(
         {
-            "answer": "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**",
+            "answer": expected,
             "citations": [
                 {
                     "title": "Báo cáo GDP",
@@ -242,7 +268,8 @@ async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
                     "score": 0.9123,
                 }
             ],
-        }
+        },
+        stream_tokens=["GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)", "\n\n- Mục 1\n- **Mục 2**"],
     )
 
     async with AsyncClient(
@@ -266,14 +293,13 @@ async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
     all_content = "".join(
         chunk["choices"][0]["delta"].get("content", "") for chunk in data_chunks
     )
-    assert all_content == (
-        "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**"
-    )
+    assert all_content == expected
     assert "**Nguồn:**" not in all_content
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming_matches_non_streaming_multiline_markdown():
+    """Non-streaming returns the graph answer; streaming relays stream_chat tokens."""
     answer = "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**"
     app, _, _, _, _ = _make_app(
         {
@@ -286,7 +312,8 @@ async def test_chat_endpoint_streaming_matches_non_streaming_multiline_markdown(
                     "score": 0.9123,
                 }
             ],
-        }
+        },
+        stream_tokens=["GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)", "\n\n- Mục 1\n- **Mục 2**"],
     )
 
     async with AsyncClient(
@@ -522,12 +549,13 @@ async def test_execute_chat_turn_returns_compact_trace_output():
         max_tokens=None,
     )
 
-    assert result == {
-        "answer": "GDP tăng 7% [GDP](https://example.com/gdp)",
-        "citations": [{"context_id": "hybrid:1"}],
-        "task_type": "rag",
-        "resolved_query": "GDP Việt Nam?",
-    }
+    assert result["answer"] == "GDP tăng 7% [GDP](https://example.com/gdp)"
+    assert result["citations"] == [{"context_id": "hybrid:1"}]
+    assert result["task_type"] == "rag"
+    assert result["resolved_query"] == "GDP Việt Nam?"
+    # Internal fields must not surface in the API result
+    assert "generation_prompt" not in result
+    assert "final_context" not in result
 
 
 @pytest.mark.asyncio
@@ -589,3 +617,74 @@ async def test_execute_chat_turn_uses_rewritten_query_to_route_general_chat():
     assert result["task_type"] == "general_chat"
     assert "lời chào khách hàng" in result["resolved_query"]
     mock_graph.ainvoke.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_relays_upstream_deltas_without_rechunking():
+    """Streaming path calls stream_chat() and relays each delta token immediately."""
+    tokens = ["GDP", " tăng", " 6.93%", " [S1]"]
+    app, _, mock_task_llm, _, _ = _make_app(
+        {
+            "answer": "GDP tăng 6.93% [S1]",
+            "citations": [],
+            "generation_prompt": "context prompt",
+        },
+        stream_tokens=tokens,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": "multimodal-economic-rag",
+                "messages": [{"role": "user", "content": "GDP Việt Nam 2024?"}],
+                "stream": True,
+            },
+        ) as response:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.headers["content-type"]
+
+            received = []
+            async for line in response.aiter_lines():
+                if line.startswith("data: ") and line[6:] != "[DONE]":
+                    chunk = json.loads(line[6:])
+                    content = chunk["choices"][0]["delta"].get("content")
+                    if content:
+                        received.append(content)
+
+    # Each token arrives as its own SSE event (no rechunking)
+    assert received == tokens
+    all_text = "".join(received)
+    assert "GDP" in all_text
+    assert "[S1]" in all_text
+
+
+def test_rag_prompt_uses_inline_source_ids():
+    """build_rag_prompt formats sources with [S1], [S2] IDs and citation instructions."""
+    from orchestrator.pipeline.rag_prompts import build_rag_prompt
+
+    sources = [
+        {
+            "source_id": "S1",
+            "title": "Báo cáo GDP",
+            "url": "https://gso.gov.vn/gdp",
+            "text": "GDP tăng 6.93% năm 2023.",
+        },
+        {
+            "source_id": "S2",
+            "title": "World Bank",
+            "url": "https://worldbank.org/vn",
+            "text": "Tăng trưởng ổn định.",
+        },
+    ]
+    prompt = build_rag_prompt(sources)
+
+    assert "[S1]" in prompt
+    assert "[S2]" in prompt
+    assert "Báo cáo GDP" in prompt
+    assert "https://gso.gov.vn/gdp" in prompt
+    assert "GDP tăng 6.93%" in prompt
+    assert "Không tạo nguồn ngoài danh sách" in prompt

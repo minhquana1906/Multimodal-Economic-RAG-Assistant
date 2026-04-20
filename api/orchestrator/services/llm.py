@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import AsyncIterator
 
 from langsmith import traceable
 from loguru import logger
@@ -131,6 +132,25 @@ class LLMClient:
         except Exception as e:
             logger.warning(f"detect_intent failed, defaulting to rag: {e}")
             return {"route": "rag", "resolved_query": last_user}
+
+    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        """Yield delta text chunks from provider-side streaming. Does not buffer."""
+        try:
+            stream = await self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                stream=True,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta and delta.content:
+                    yield delta.content
+        except Exception as e:
+            logger.error(f"LLM streaming error: {e}")
+            yield "Xin lỗi, không thể tạo phản hồi."
 
     async def warm_start(self) -> None:
         """Send a minimal request to reduce first-token latency after startup."""
