@@ -1,5 +1,6 @@
 # Python-generated files
 __pycache__/
+.pytest_cache/
 *.py[oc]
 build/
 dist/
@@ -9,8 +10,6 @@ wheels/
 # Virtual environments
 .venv
 
-superpowers/
-docs/superpowers/
 
 # Environment
 .env
@@ -32,10 +31,8 @@ services/*/models/
 .agents/
 CLAUDE.md
 .mcp.json
-skills-lock.json
-.env.vast
-.serena
-.pytest*
-data/
+.serena/
+superpowers/
 docs/superpowers/
+data/
 models/
