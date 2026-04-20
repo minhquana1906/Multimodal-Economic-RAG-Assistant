@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
                 services.llm,
                 settings.prompts,
                 settings,
+                web_search=services.web_search,
             )
         )
         logger.info("RAG graph ready")
