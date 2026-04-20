@@ -10,14 +10,12 @@ def _make_config():
     config.rag.web_fallback_soft_threshold = 0.85
     config.prompts = MagicMock()
     config.prompts.rag_user_template = (
-        "{conversation_context}\n\n"
         "{response_contract}\n\n"
         "Nguon:\n{context}\n\n"
         "Cau hoi:\n{question}"
     )
     config.prompts.user_template = "Context:\n{context}\n\nQuestion: {question}"
     config.prompts.rag_text_response_contract = "Tra loi bang markdown voi header `##`."
-    config.prompts.rag_audio_response_contract = "Tra loi ngan gon nhu van noi."
     return config
 
 
@@ -26,8 +24,6 @@ def _make_state():
         "query": "Cau hoi goc",
         "raw_query": "Cau hoi goc",
         "resolved_query": "Cau hoi da lam ro",
-        "conversation_context": "Tom tat hoi thoai",
-        "response_mode": "text",
         "final_context": [
             {
                 "context_id": "hybrid:1",
@@ -66,7 +62,6 @@ def test_build_generation_prompt_uses_modular_prompt_parts():
 
     prompt = build_generation_prompt(state, config)
 
-    assert "Tom tat hoi thoai" in prompt
     assert "Tra loi bang markdown voi header `##`." in prompt
     assert "Context ID: hybrid:1" in prompt
     assert "Cau hoi da lam ro" in prompt

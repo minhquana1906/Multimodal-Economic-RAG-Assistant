@@ -19,18 +19,11 @@ def _make_app(
     general_result: str = "general result",
     stream_tokens: list[str] | None = None,
     detect_intent_route: str = "rag",
-) -> tuple[FastAPI, MagicMock, MagicMock, MagicMock, PromptsConfig]:
+) -> tuple[FastAPI, MagicMock, MagicMock, PromptsConfig]:
     """Build a minimal FastAPI app with mocked RAG, auxiliary, and general chat handlers."""
     mock_graph = MagicMock()
     mock_graph.ainvoke = AsyncMock(return_value=rag_result)
     mock_task_llm = MagicMock()
-    mock_guard = MagicMock()
-    mock_guard.check_input = AsyncMock(
-        return_value={"label": "safe", "safe_label": "Safe", "categories": [], "refusal": None}
-    )
-    mock_guard.check_output = AsyncMock(
-        return_value={"label": "safe", "safe_label": "Safe", "categories": [], "refusal": "No"}
-    )
     prompts = PromptsConfig()
 
     async def _complete_prompt(prompt: str, max_tokens: int | None = None) -> str:
@@ -70,14 +63,14 @@ def _make_app(
     mock_task_llm.stream_chat = _stream_chat
 
     app = FastAPI()
-    app.include_router(create_chat_router(mock_graph, mock_task_llm, mock_guard, prompts))
-    return app, mock_graph, mock_task_llm, mock_guard, prompts
+    app.include_router(create_chat_router(mock_graph, mock_task_llm, prompts))
+    return app, mock_graph, mock_task_llm, prompts
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_non_streaming():
     """Non-streaming: returns canonical message.content payload."""
-    app, mock_graph, mock_task_llm, _, _ = _make_app(
+    app, mock_graph, mock_task_llm, _ = _make_app(
         {
             "answer": "GDP tăng 7%",
             "citations": [
@@ -116,7 +109,7 @@ async def test_chat_endpoint_non_streaming():
 @pytest.mark.asyncio
 async def test_chat_endpoint_streaming():
     """Streaming: continues to emit delta.content chunks via stream_chat."""
-    app, _, _, _, _ = _make_app(
+    app, _, _, _ = _make_app(
         {
             "answer": "GDP tăng",
             "citations": [],
@@ -173,7 +166,7 @@ async def test_chat_endpoint_streaming():
 async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
     """Streaming via stream_chat relays tokens without adding citation footer."""
     expected = "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**"
-    app, _, _, _, _ = _make_app(
+    app, _, _, _ = _make_app(
         {
             "answer": expected,
             "citations": [
@@ -217,7 +210,7 @@ async def test_chat_endpoint_streaming_preserves_inline_markdown_answer():
 async def test_chat_endpoint_streaming_matches_non_streaming_multiline_markdown():
     """Non-streaming returns the graph answer; streaming relays stream_chat tokens."""
     answer = "GDP tăng theo [Báo cáo GDP](https://mof.gov.vn/gdp)\n\n- Mục 1\n- **Mục 2**"
-    app, _, _, _, _ = _make_app(
+    app, _, _, _ = _make_app(
         {
             "answer": answer,
             "citations": [
@@ -266,7 +259,7 @@ async def test_chat_endpoint_streaming_matches_non_streaming_multiline_markdown(
 @pytest.mark.asyncio
 async def test_chat_endpoint_no_user_message_returns_400():
     """Returns 400 when messages contains no user-role message."""
-    app, _, _, _, _ = _make_app({"answer": "", "citations": []})
+    app, _, _, _ = _make_app({"answer": "", "citations": []})
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -316,7 +309,7 @@ async def test_execute_chat_turn_returns_compact_trace_output():
 async def test_streaming_relays_upstream_deltas_without_rechunking():
     """Streaming path calls stream_chat() and relays each delta token immediately."""
     tokens = ["GDP", " tăng", " 6.93%", " [S1]"]
-    app, _, mock_task_llm, _, _ = _make_app(
+    app, _, mock_task_llm, _ = _make_app(
         {
             "answer": "GDP tăng 6.93% [S1]",
             "citations": [],

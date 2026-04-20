@@ -27,26 +27,18 @@ def _build_initial_state(
     *,
     raw_query: str,
     resolved_query: str,
-    response_mode: str,
 ) -> RAGState:
     return {
         "query": raw_query,
         "raw_query": raw_query,
         "resolved_query": resolved_query,
-        "conversation_summary": "",
-        "conversation_context": "",
         "task_type": "rag",
-        "response_mode": response_mode,
-        "input_safe": True,
         "embeddings": [],
         "retrieved_docs": [],
         "reranked_docs": [],
         "web_results": [],
         "final_context": [],
         "answer": "",
-        "output_safe": True,
-        "input_guard_result": {},
-        "output_guard_result": {},
         "generation_prompt": "",
         "citations": [],
         "citation_pool": {},
@@ -60,8 +52,6 @@ async def execute_chat_turn(
     llm: Any | None,
     messages,
     max_tokens: int | None,
-    response_mode: str = "text",
-    guard: Any | None = None,
     prompts: PromptsConfig | None = None,
 ) -> dict:
     """Route request via detect_intent: direct skips the graph, rag invokes it."""
@@ -99,7 +89,6 @@ async def execute_chat_turn(
         _build_initial_state(
             raw_query=raw_query,
             resolved_query=resolved_query,
-            response_mode=response_mode,
         )
     )
     return {
@@ -113,7 +102,6 @@ async def execute_chat_turn(
 def create_chat_router(
     rag_graph,
     task_llm=None,
-    guard=None,
     prompts: PromptsConfig | None = None,
 ) -> APIRouter:
     """Return a fresh APIRouter with /v1/chat/completions bound to the given RAG graph."""
@@ -134,8 +122,6 @@ def create_chat_router(
                 task_llm,
                 request.messages,
                 request.max_tokens,
-                "text",
-                guard=guard,
                 prompts=prompts,
             )
 

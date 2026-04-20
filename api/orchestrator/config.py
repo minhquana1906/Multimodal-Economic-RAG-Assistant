@@ -79,7 +79,6 @@ class PromptsConfig(BaseModel):
         "Bạn chỉ được khẳng định điều có cơ sở từ nguồn đã cung cấp và phải nói rõ giới hạn khi bằng chứng chưa đủ."
     )
     rag_user_template: str = (
-        "Ngữ cảnh hội thoại:\n{conversation_context}\n\n"
         "Nguồn đã gán ID:\n{context}\n\n"
         "Câu hỏi đã làm rõ:\n{question}"
     )

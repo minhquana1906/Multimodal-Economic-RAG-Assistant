@@ -22,10 +22,7 @@ class RAGState(TypedDict):
     query: str
     raw_query: str
     resolved_query: str
-    conversation_summary: str
-    conversation_context: str
     task_type: str
-    response_mode: Literal["text", "audio"]
     embeddings: list[float]
     retrieved_docs: list[dict]
     reranked_docs: list[dict]

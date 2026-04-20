@@ -21,7 +21,7 @@ import numpy as np
 
 _root = Path(__file__).parents[2]
 
-for _service in ("inference", "guard", "asr", "tts"):
+for _service in ("inference",):
     _svc_path = str(_root / "services" / _service)
     if _svc_path not in sys.path:
         sys.path.append(_svc_path)
@@ -161,9 +161,6 @@ _load_or_stub_sentence_transformers()
 # up the correct one from whichever service path is first on sys.path.
 for _mod in (
     "inference_app",
-    "guard_app",
-    "asr_app",
-    "tts_app",
     "text_preprocessor",
     "abbreviations",
 ):

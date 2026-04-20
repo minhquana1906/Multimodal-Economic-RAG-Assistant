@@ -11,7 +11,6 @@ from orchestrator.config import ObservabilityConfig
 DOMAIN_LEVELS = [
     ("RETRIEVAL", 25, "<cyan>"),
     ("RERANK",    26, "<blue>"),
-    ("GUARD",     27, "<yellow>"),
     ("LLM",       28, "<magenta>"),
 ]
 

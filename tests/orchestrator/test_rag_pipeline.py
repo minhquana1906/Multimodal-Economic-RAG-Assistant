@@ -2,16 +2,6 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
-SAFE_RESULT = {"label": "safe", "safe_label": "Safe", "categories": [], "refusal": None}
-SAFE_OUTPUT_RESULT = {"label": "safe", "safe_label": "Safe", "categories": [], "refusal": "No"}
-UNSAFE_VIOLENT_RESULT = {
-    "label": "unsafe",
-    "safe_label": "Unsafe",
-    "categories": ["Violent"],
-    "refusal": "Yes",
-}
-
-
 def _reranked_to_scores(reranked: list[dict] | None, n_docs: int) -> list[float]:
     """Convert old reranker format [{index, score}] to a flat scores list for inference.rerank."""
     if not reranked:
@@ -25,7 +15,6 @@ def _reranked_to_scores(reranked: list[dict] | None, n_docs: int) -> list[float]
 
 
 def _make_services(
-    input_guard_result=None,
     embed_vector=None,
     embed_raises=False,
     sparse_vector=None,
@@ -35,16 +24,9 @@ def _make_services(
     reranked=None,
     web_results=None,
     llm_side_effect=None,
-    output_guard_result=None,
-    output_guard_side_effect=None,
 ):
     """Build a mock services object for RAG pipeline tests."""
     services = MagicMock()
-    services.guard.check_input = AsyncMock(return_value=input_guard_result or SAFE_RESULT)
-    if output_guard_side_effect is not None:
-        services.guard.check_output = AsyncMock(side_effect=output_guard_side_effect)
-    else:
-        services.guard.check_output = AsyncMock(return_value=output_guard_result or SAFE_OUTPUT_RESULT)
     if embed_raises:
         services.inference.embed_query = AsyncMock(side_effect=Exception("embed down"))
     else:
@@ -76,7 +58,6 @@ def _make_config(
     web_fallback_hard_threshold=0.7,
     web_fallback_soft_threshold=0.85,
     no_context_message="Không tìm thấy dữ liệu phù hợp trong tài liệu nội bộ hoặc nguồn web hiện có.",
-    guard_error_message="Xin lỗi, yêu cầu của bạn không thể xử lý.",
     apology_message="Xin lỗi, tôi không thể trả lời câu hỏi này theo nội dung của chúng tôi.",
 ):
     config = MagicMock()
@@ -108,7 +89,6 @@ def _make_config(
         "Trả lời bằng tiếng Việt trong một đoạn ngắn, tự nhiên như văn nói. Giữ văn nói tự nhiên, ấm áp, nhẹ nhàng."
     )
     config.prompts.no_context_message = no_context_message
-    config.prompts.guard_error_message = guard_error_message
     config.prompts.apology_message = apology_message
     config.prompts.reranker_instruction = "Rank by relevance."
     return config
@@ -119,20 +99,13 @@ def _initial_state(query="GDP Việt Nam?"):
         "query": query,
         "raw_query": query,
         "resolved_query": query,
-        "conversation_summary": "",
-        "conversation_context": "",
         "task_type": "rag",
-        "response_mode": "text",
-        "input_safe": False,
         "embeddings": [],
         "retrieved_docs": [],
         "reranked_docs": [],
         "web_results": [],
         "final_context": [],
         "answer": "",
-        "output_safe": False,
-        "input_guard_result": {},
-        "output_guard_result": {},
         "generation_prompt": "",
         "citations": [],
         "citation_pool": {},
@@ -232,104 +205,6 @@ async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoder_errors(
     assert services.retriever.hybrid_search.await_args.kwargs["sparse_vector"] is None
 
 
-@pytest.mark.asyncio
-async def test_rag_pipeline_uses_resolved_query_for_retrieval_and_guards():
-    from orchestrator.pipeline.rag import build_rag_graph
-
-    retrieved = [{
-        "id": "1",
-        "text": "bond text",
-        "source": "src.com",
-        "title": "Bonds",
-        "url": "https://example.com/bonds",
-        "score": 0.7,
-    }]
-    reranked = [{"index": 0, "score": 0.9}]
-    raw_query = "Còn trái phiếu doanh nghiệp thì sao?"
-    resolved_query = (
-        "Trái phiếu doanh nghiệp tại Việt Nam đang chịu tác động thế nào trong bối cảnh thị trường vốn chịu áp lực?"
-    )
-
-    services = _make_services(
-        retrieved_docs=retrieved,
-        reranked=reranked,
-        llm_side_effect=["GDP tăng 7% [[cite:hybrid:1]]"],
-    )
-    config = _make_config(fallback_min_chunks=1)
-    graph = build_rag_graph(services, config)
-
-    result = await graph.ainvoke(
-        _initial_state(query=raw_query)
-        | {
-            "raw_query": raw_query,
-            "resolved_query": resolved_query,
-        }
-    )
-
-    assert result["answer"] == _answer_with_footer(
-        "GDP tăng 7%",
-        title="Bonds",
-        url="https://example.com/bonds",
-        source="src.com",
-        score=0.9,
-    )
-    services.inference.embed_query.assert_awaited_once_with(resolved_query)
-    services.inference.rerank.assert_awaited_once()
-    assert services.inference.rerank.await_args.kwargs["query"] == resolved_query
-
-
-@pytest.mark.asyncio
-async def test_rag_pipeline_generation_prompt_uses_conversation_context_and_resolved_query():
-    from orchestrator.pipeline.rag import build_rag_graph
-
-    retrieved = [{
-        "id": "1",
-        "text": "bond text",
-        "source": "src.com",
-        "title": "Bonds",
-        "url": "https://example.com/bonds",
-        "score": 0.7,
-    }]
-    reranked = [{"index": 0, "score": 0.9}]
-    conversation_context = (
-        "Tóm tắt hội thoại:\nNgười dùng đang hỏi về bất động sản và thị trường vốn."
-    )
-
-    services = _make_services(
-        retrieved_docs=retrieved,
-        reranked=reranked,
-        llm_side_effect=["Answer with context [[cite:hybrid:1]]"],
-    )
-    config = _make_config(fallback_min_chunks=1)
-    graph = build_rag_graph(services, config)
-
-    result = await graph.ainvoke(
-        _initial_state(query="Còn trái phiếu doanh nghiệp thì sao?")
-        | {
-            "raw_query": "Còn trái phiếu doanh nghiệp thì sao?",
-            "resolved_query": "Trái phiếu doanh nghiệp ảnh hưởng thế nào đến thị trường vốn?",
-            "conversation_context": conversation_context,
-        }
-    )
-
-    assert result["answer"] == _answer_with_footer(
-        "Answer with context",
-        title="Bonds",
-        url="https://example.com/bonds",
-        source="src.com",
-        score=0.9,
-    )
-    prompt = services.llm.generate.await_args.kwargs["user_prompt"]
-    assert conversation_context in prompt
-    assert "Trái phiếu doanh nghiệp ảnh hưởng thế nào đến thị trường vốn?" in prompt
-    assert "Còn trái phiếu doanh nghiệp thì sao?" not in prompt
-    assert "markdown" in prompt.lower()
-    assert "header `##`" in prompt
-    assert "tiêu đề do bạn tự đặt" in prompt
-    assert "`---`" in prompt
-    assert "Ưu tiên dùng gạch đầu dòng" in prompt
-    assert "### Trả lời ngắn gọn" not in prompt
-    assert "### Phân tích chính" not in prompt
 
 
 @pytest.mark.asyncio
@@ -655,39 +530,6 @@ async def test_rag_pipeline_text_mode_appends_web_citation_footer():
     assert result["citations"][0]["source_type"] == "web"
 
 
-@pytest.mark.asyncio
-async def test_rag_pipeline_audio_mode_uses_spoken_prompt_and_skips_footer():
-    from orchestrator.pipeline.rag import build_rag_graph
-
-    retrieved = [{
-        "id": "1",
-        "text": "GDP text",
-        "source": "src.com",
-        "title": "GDP",
-        "url": "https://example.com/gdp",
-        "score": 0.7,
-    }]
-    reranked = [{"index": 0, "score": 0.9}]
-
-    services = _make_services(
-        retrieved_docs=retrieved,
-        reranked=reranked,
-        llm_side_effect=["Giá đang tăng, nhưng tăng chậm lại."],
-    )
-    config = _make_config(fallback_min_chunks=1)
-    graph = build_rag_graph(services, config)
-
-    result = await graph.ainvoke(
-        _initial_state() | {"response_mode": "audio"}
-    )
-
-    prompt = services.llm.generate.await_args.kwargs["user_prompt"]
-    assert "một đoạn ngắn" in prompt
-    assert "văn nói tự nhiên" in prompt
-    assert "### Trả lời ngắn gọn" not in prompt
-    assert result["answer"] == "Giá đang tăng, nhưng tăng chậm lại."
-    assert result["citations"][0]["context_id"] == "hybrid:1"
-
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_happy_path():
@@ -728,25 +570,6 @@ async def test_rag_pipeline_happy_path():
     services.llm.generate.assert_called_once()
     services.web_search.search.assert_not_called()
 
-
-@pytest.mark.asyncio
-async def test_rag_pipeline_unsafe_input_uses_category_reason():
-    """Slim graph: input guard removed, embed always called regardless of content."""
-    from orchestrator.pipeline.rag import build_rag_graph
-
-    services = _make_services(
-        retrieved_docs=[],
-        reranked=[],
-        web_results=[],
-    )
-    config = _make_config(fallback_min_chunks=0)
-    graph = build_rag_graph(services, config)
-
-    result = await graph.ainvoke(_initial_state())
-
-    # Guard nodes removed; embed is called and no-context message is returned
-    assert result["answer"] == config.prompts.no_context_message
-    services.inference.embed_query.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1024,73 +847,3 @@ async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoding_fails(
     )
 
 
-@pytest.mark.asyncio
-async def test_rag_pipeline_unsafe_output_regenerates_once():
-    """Slim graph: output guard removed, LLM called once, answer returned as-is."""
-    from orchestrator.pipeline.rag import build_rag_graph
-
-    retrieved = [{
-        "id": "1",
-        "text": "t",
-        "source": "s",
-        "title": "T",
-        "url": "https://example.com/t",
-        "score": 0.9,
-    }]
-    reranked = [{"index": 0, "score": 0.9}]
-
-    services = _make_services(
-        retrieved_docs=retrieved,
-        reranked=reranked,
-        llm_side_effect=["Generated text [[cite:hybrid:1]]"],
-    )
-    config = _make_config(fallback_min_chunks=1)
-    graph = build_rag_graph(services, config)
-
-    result = await graph.ainvoke(_initial_state())
-
-    assert result["answer"] == _answer_with_footer(
-        "Generated text",
-        title="T",
-        url="https://example.com/t",
-        source="s",
-        score=0.9,
-    )
-    assert services.llm.generate.await_count == 1
-    assert len(result["citations"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_rag_pipeline_denies_after_unsafe_retry():
-    """Slim graph: output guard removed, LLM answer returned directly with citations."""
-    from orchestrator.pipeline.rag import build_rag_graph
-
-    retrieved = [{
-        "id": "1",
-        "text": "t",
-        "source": "s",
-        "title": "T",
-        "url": "https://example.com/t",
-        "score": 0.9,
-    }]
-    reranked = [{"index": 0, "score": 0.9}]
-
-    services = _make_services(
-        retrieved_docs=retrieved,
-        reranked=reranked,
-        llm_side_effect=["Generated text [[cite:hybrid:1]]"],
-    )
-    config = _make_config(fallback_min_chunks=1)
-    graph = build_rag_graph(services, config)
-
-    result = await graph.ainvoke(_initial_state())
-
-    assert result["answer"] == _answer_with_footer(
-        "Generated text",
-        title="T",
-        url="https://example.com/t",
-        source="s",
-        score=0.9,
-    )
-    assert services.llm.generate.await_count == 1
-    assert len(result["citations"]) == 1

@@ -26,7 +26,7 @@ def _make_app_with_intent(
     prompts = PromptsConfig()
 
     app = FastAPI()
-    app.include_router(create_chat_router(mock_graph, mock_llm, None, prompts))
+    app.include_router(create_chat_router(mock_graph, mock_llm, prompts))
     return app, mock_graph, mock_llm
 
 
