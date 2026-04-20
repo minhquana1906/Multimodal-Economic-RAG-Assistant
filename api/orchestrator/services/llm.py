@@ -83,31 +83,18 @@ class LLMClient:
             logger.error(f"Auxiliary LLM generation error: {e}")
             return ""
 
-    async def detect_intent(self, messages: list[dict[str, str]]) -> dict[str, str]:
+    async def detect_intent(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        fallback_query: str,
+    ) -> dict[str, str]:
         """Return routing intent for the conversation.
 
-        Returns {"route": "direct"|"rag", "resolved_query": "..."}.
-        Falls back to {"route": "rag", "resolved_query": last_user_message} on invalid JSON.
+        Returns {"route": "direct"|"rag", "resolved_query": "..."} and falls back to
+        {"route": "rag", "resolved_query": fallback_query} on invalid JSON.
         """
-        last_user = next(
-            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
-            "",
-        )
-        messages_text = "\n".join(
-            f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in messages
-        )
-        system_prompt = (
-            "Bạn là bộ định tuyến route cho trợ lý kinh tế - tài chính.\n"
-            "Chỉ trả về JSON hợp lệ với hai khóa: route và resolved_query.\n"
-            'route phải là "direct" hoặc "rag".\n'
-            "direct: câu hỏi đơn giản, chào hỏi, yêu cầu viết lại, không cần tìm kiếm tài liệu.\n"
-            "rag: câu hỏi về kinh tế, tài chính, số liệu, phân tích, cần tra cứu tài liệu.\n"
-            "Nếu không chắc, chọn rag."
-        )
-        user_prompt = (
-            "Phân tích các tin nhắn sau và trả về JSON theo đúng schema đã yêu cầu.\n\n"
-            f"{messages_text}"
-        )
         try:
             content, _, _ = await self._create_completion(
                 [
@@ -127,14 +114,17 @@ class LLMClient:
             route = parsed.get("route", "rag")
             if route not in ("direct", "rag"):
                 route = "rag"
-            resolved_query = parsed.get("resolved_query") or last_user
+            resolved_query = parsed.get("resolved_query") or fallback_query
             return {"route": route, "resolved_query": resolved_query}
         except Exception as e:
             logger.warning(f"detect_intent failed, defaulting to rag: {e}")
-            return {"route": "rag", "resolved_query": last_user}
+            return {"route": "rag", "resolved_query": fallback_query}
 
+    @traceable(name="Stream Answer", run_type="llm")
     async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
         """Yield delta text chunks from provider-side streaming. Does not buffer."""
+        t0 = time.monotonic()
+        total_chars = 0
         try:
             stream = await self._client.chat.completions.create(
                 model=self._model,
@@ -147,7 +137,13 @@ class LLMClient:
             async for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta and delta.content:
+                    total_chars += len(delta.content)
                     yield delta.content
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            logger.log(
+                "LLM",
+                f"model={self._model} chars={total_chars} latency_ms={latency_ms} task=stream",
+            )
         except Exception as e:
             logger.error(f"LLM streaming error: {e}")
             yield "Xin lỗi, không thể tạo phản hồi."
