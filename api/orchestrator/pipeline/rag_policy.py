@@ -18,6 +18,13 @@ _TIME_SENSITIVE_MARKERS = (
     "quý này",
 )
 
+_ENTITY_PATTERNS = [
+    re.compile(r"\b(19|20)\d{2}\b"),
+    re.compile(r"\b\d[\d,.]*\s*(%|tỷ|triệu|nghìn tỷ|billion|million|USD|VND|\$|₫)", re.IGNORECASE),
+    re.compile(r"\b[A-Z]{3,5}\b"),
+    re.compile(r"(công ty|tập đoàn|ngân hàng|Inc\.|Corp\.|Ltd\.?)", re.IGNORECASE),
+]
+
 
 def _tokenize(text: str) -> list[str]:
     return re.findall(r"\w+", text.lower())
@@ -34,6 +41,11 @@ def _resolved_query(state: dict) -> str:
 def _is_time_sensitive_query(query: str) -> bool:
     normalized = " ".join(query.lower().split())
     return any(marker in normalized for marker in _TIME_SENSITIVE_MARKERS)
+
+
+def _has_entity_or_numeric_signal(query: str) -> bool:
+    """Detect named entities, years, numeric units, or ticker symbols in query."""
+    return any(pattern.search(query) for pattern in _ENTITY_PATTERNS)
 
 
 def _material_query_expansion(raw_query: str, resolved_query: str) -> bool:
@@ -61,20 +73,32 @@ def _has_shallow_internal_support(reranked_docs: list[dict], config) -> bool:
     )
 
 
-def should_add_web_fallback(state: dict, config) -> bool:
+def should_add_web_fallback(state: dict, config) -> tuple[bool, str]:
+    """Return (use_web, reason) for the RAG pipeline web fallback decision."""
     reranked_docs = state.get("reranked_docs", [])
     if not reranked_docs:
-        return True
+        return True, "no_docs"
 
     top_score = float(reranked_docs[0].get("score", 0.0) or 0.0)
     if top_score < config.rag.web_fallback_hard_threshold:
-        return True
+        return True, "hard_below"
     if top_score >= config.rag.web_fallback_soft_threshold:
-        return False
+        return False, "soft_above"
     if _has_shallow_internal_support(reranked_docs, config):
-        return True
+        return True, "shallow"
     if _is_time_sensitive_query(_resolved_query(state)):
-        return True
+        return True, "time_sensitive"
     if _material_query_expansion(_raw_query(state), _resolved_query(state)):
-        return True
-    return False
+        return True, "expansion"
+    return False, "none"
+
+
+def should_use_web_search_for_direct(query: str, config) -> tuple[bool, str]:
+    """Return (use_web, reason) for direct-chat web augmentation."""
+    if not getattr(config.observability, "tavily_api_key", None):
+        return False, "disabled"
+    if _is_time_sensitive_query(query):
+        return True, "time_sensitive"
+    if _has_entity_or_numeric_signal(query):
+        return True, "entity_or_numeric"
+    return False, "not_needed"
