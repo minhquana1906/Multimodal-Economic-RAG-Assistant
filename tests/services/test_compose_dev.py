@@ -9,15 +9,10 @@ def test_standalone_dev_compose_exists_and_includes_full_stack():
 
     for service in [
         "qdrant:",
-        "embedding:",
-        "reranker:",
-        "guard:",
+        "inference:",
         "orchestrator:",
         "webui:",
-        "tunnel:",
         "ingest:",
-        "asr:",
-        "tts:",
     ]:
         assert service in content
 
@@ -25,11 +20,7 @@ def test_standalone_dev_compose_exists_and_includes_full_stack():
 def test_dev_compose_mounts_all_build_context_code_paths():
     content = (ROOT / "docker-compose.dev.yaml").read_text(encoding="utf-8")
 
-    assert "./services/embedding:/app" in content
-    assert "./services/reranker:/app" in content
-    assert "./services/guard:/app" in content
-    assert "./services/asr:/app" in content
-    assert "./services/tts:/app" in content
+    assert "./services/inference:/app" in content
     assert "./api:/app" in content
     assert "./scripts:/app" in content
 
@@ -39,7 +30,7 @@ def test_dev_compose_persists_huggingface_cache_for_model_and_ingest_services():
 
     assert "HF_HOME: /data/huggingface" in content
     assert "HUGGINGFACE_HUB_CACHE: /data/huggingface/hub" in content
-    assert "TRANSFORMERS_CACHE: /data/huggingface/hub" in content
+    assert "TRANSFORMERS_CACHE:" not in content
     assert "./.cache/huggingface:/data/huggingface" in content
 
 
@@ -52,14 +43,10 @@ def test_dev_compose_uses_anchors_for_shared_dev_config():
     assert "<<: *gpu-reservation" in content
 
 
-def test_dev_compose_sets_guard_memory_env_defaults():
+def test_dev_compose_sets_inference_env_defaults():
     content = (ROOT / "docker-compose.dev.yaml").read_text(encoding="utf-8")
 
-    assert content.count("PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True") >= 3
-    assert "GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}" in content
-    assert "EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}" in content
-    assert "MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}" in content
-    assert "ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}" in content
+    assert "PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True" in content
     assert "QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}" in content
 
 
@@ -73,7 +60,6 @@ def test_makefile_contains_direct_dev_compose_targets():
         "dev-restart:",
         "dev-logs:",
         "dev-ps:",
-        "dev-audio-up:",
         "dev-ingest:",
     ]:
         assert target in makefile

@@ -93,7 +93,7 @@ async def test_full_ingestion_flow_mocked():
     # ------------------------------------------------------------------
     fake_embeddings = [[0.1] * 1024] * len(all_chunks)
 
-    with patch("ingest.get_dense_embeddings", new_callable=AsyncMock) as mock_embed:
+    with patch("ingest._embed_with_retry", new_callable=AsyncMock) as mock_embed:
         mock_embed.return_value = fake_embeddings[: min(256, len(all_chunks))]
 
         # ------------------------------------------------------------------

@@ -10,18 +10,24 @@ from orchestrator.config import get_settings
 from orchestrator.tracing import setup_logging, setup_langsmith
 from orchestrator.pipeline.rag import build_rag_graph
 from orchestrator.routers.chat import create_chat_router
-from orchestrator.services.guard import GuardClient
-from orchestrator.services.embedder import EmbedderClient
+from orchestrator.services.inference import InferenceClient
 from orchestrator.services.retriever import RetrieverClient
-from orchestrator.services.reranker import RerankerClient
 from orchestrator.services.llm import LLMClient
-from orchestrator.services.sparse_encoder import SparseEncoderService
 from orchestrator.services.web_search import WebSearchClient
+
+
+def _looks_like_runtime_settings(settings) -> bool:
+    return all(
+        hasattr(settings, field) for field in ("observability", "services", "llm")
+    )
 
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
+    if not _looks_like_runtime_settings(settings):
+        get_settings.cache_clear()
+        settings = get_settings()
     setup_logging(settings.observability)
     setup_langsmith(settings.observability)
 
@@ -29,22 +35,13 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         logger.info("Initialising service clients and RAG graph…")
         services = SimpleNamespace(
-            guard=GuardClient(
-                settings.services.guard_url,
-                settings.services.guard_timeout,
+            inference=InferenceClient(
+                settings.services.inference_url,
+                settings.services.inference_timeout,
             ),
-            embedder=EmbedderClient(
-                settings.services.embedding_url,
-                settings.services.embedding_timeout,
-            ),
-            sparse_encoder=SparseEncoderService(),
             retriever=RetrieverClient(
                 settings.services.qdrant_url,
                 settings.services.qdrant_collection,
-            ),
-            reranker=RerankerClient(
-                settings.services.reranker_url,
-                settings.services.reranker_timeout,
             ),
             llm=LLMClient(
                 url=settings.llm.url,
@@ -59,10 +56,23 @@ def create_app() -> FastAPI:
             ),
         )
         rag_graph = build_rag_graph(services, settings)
-        app.include_router(create_chat_router(rag_graph, services.llm))
+        retrieval_graph = build_rag_graph(services, settings, retrieval_only=True)
+        try:
+            await services.llm.warm_start()
+            logger.info("LLM warm-start completed")
+        except Exception as exc:
+            logger.warning(f"LLM warm-start failed, continuing startup: {exc}")
+        app.include_router(
+            create_chat_router(
+                rag_graph,
+                retrieval_graph,
+                services.llm,
+                settings.prompts,
+                settings,
+            )
+        )
         logger.info("RAG graph ready")
         yield
-        # graceful shutdown placeholder
 
     app = FastAPI(
         title="Multimodal RAG Orchestrator",
@@ -77,7 +87,7 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/models")
     async def models():
-        return {"data": [{"id": "multimodal-economic-rag", "object": "model"}]}
+        return {"data": [{"id": "Economic-RAG-Assistant", "object": "model"}]}
 
     return app
 

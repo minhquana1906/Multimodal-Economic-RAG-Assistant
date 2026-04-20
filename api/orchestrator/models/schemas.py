@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TextContentPart(BaseModel):
@@ -26,6 +26,8 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     model: str
     messages: list[Message] = Field(min_length=1)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)

@@ -1,6 +1,47 @@
 import pytest
 
 
+def test_services_config_uses_single_inference_url():
+    from orchestrator.config import ServicesConfig
+
+    assert set(ServicesConfig.model_fields.keys()) == {
+        "inference_url",
+        "inference_timeout",
+        "qdrant_url",
+        "qdrant_collection",
+    }
+
+    services = ServicesConfig(
+        inference_url="http://inference:8001",
+        inference_timeout=30.0,
+        qdrant_url="http://qdrant:6333",
+        qdrant_collection="econ_vn_news",
+    )
+    assert services.inference_url.endswith(":8001")
+
+
+def test_rag_config_keeps_web_fallback_thresholds():
+    from orchestrator.config import RAGConfig
+
+    # Keep the explicit web fallback knobs as first-class config.
+    assert "web_fallback_min_chunks" in RAGConfig.model_fields
+    assert "web_fallback_hard_threshold" in RAGConfig.model_fields
+    assert "web_fallback_soft_threshold" in RAGConfig.model_fields
+
+    config = RAGConfig(
+        retrieval_top_k=5,
+        rerank_top_n=3,
+        web_fallback_min_chunks=2,
+        web_fallback_hard_threshold=0.70,
+        web_fallback_soft_threshold=0.85,
+        context_limit=8,
+        citation_limit=6,
+    )
+    assert config.web_fallback_min_chunks == 2
+    assert config.web_fallback_hard_threshold == 0.70
+    assert config.web_fallback_soft_threshold == 0.85
+
+
 def test_schemas_validate():
     from orchestrator.models.schemas import ChatRequest, Message
     req = ChatRequest(
@@ -11,6 +52,10 @@ def test_schemas_validate():
     assert req.messages[0].role == "user"
     assert req.temperature == 0.7
     assert req.stream is False
+
+    assert "response_mode" not in ChatRequest.model_fields
+    assert "modalities" not in ChatRequest.model_fields
+    assert "audio" not in ChatRequest.model_fields
 
 
 def test_chunk_context_defaults():

@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from langsmith import traceable
 from loguru import logger
 
+from orchestrator.config import PromptsConfig
 from orchestrator.models.schemas import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -18,46 +19,27 @@ from orchestrator.models.schemas import (
     ChatStreamChunk,
 )
 from orchestrator.pipeline.rag import RAGState
-from orchestrator.services.conversation import (
-    DEFAULT_PROMPT_TOKEN_BUDGET,
-    DEFAULT_RECENT_TURNS,
-    build_auxiliary_history,
-    build_auxiliary_prompt,
-    build_conversation_context,
-    classify_task,
-    extract_latest_user_query,
-    normalize_messages,
-    rewrite_followup_query,
-    should_summarize,
-    summarize_history,
-)
+from orchestrator.pipeline.rag_context import build_citation_section
+from orchestrator.pipeline.rag_prompts import build_generation_prompt, resolve_rag_system_prompt
+from orchestrator.services.conversation import extract_latest_user_query, normalize_messages
 
 
 def _build_initial_state(
     *,
     raw_query: str,
     resolved_query: str,
-    conversation_summary: str,
-    conversation_context: str,
-    task_type: str,
 ) -> RAGState:
     return {
         "query": raw_query,
         "raw_query": raw_query,
         "resolved_query": resolved_query,
-        "conversation_summary": conversation_summary,
-        "conversation_context": conversation_context,
-        "task_type": task_type,
-        "input_safe": False,
+        "task_type": "rag",
         "embeddings": [],
         "retrieved_docs": [],
         "reranked_docs": [],
         "web_results": [],
         "final_context": [],
         "answer": "",
-        "output_safe": False,
-        "input_guard_result": {},
-        "output_guard_result": {},
         "generation_prompt": "",
         "citations": [],
         "citation_pool": {},
@@ -65,112 +47,69 @@ def _build_initial_state(
     }
 
 
-def _prepare_conversation(messages, max_tokens: int | None) -> dict:
-    normalized_messages = normalize_messages(messages)
-    raw_query = extract_latest_user_query(normalized_messages)
-    task_type = classify_task(normalized_messages, raw_query)
-    non_system_messages = [message for message in normalized_messages if message.role != "system"]
-    recent_turns = non_system_messages[-DEFAULT_RECENT_TURNS:]
-    prior_turns = non_system_messages[:-1]
-
-    prompt_token_budget = max_tokens or DEFAULT_PROMPT_TOKEN_BUDGET
-    conversation_summary = ""
-    if should_summarize(
-        normalized_messages,
-        prompt_token_budget=prompt_token_budget,
-    ):
-        conversation_summary = summarize_history(normalized_messages)
-
-    conversation_context = build_conversation_context(
-        conversation_summary,
-        recent_turns,
-    )
-    resolved_query = rewrite_followup_query(
-        raw_query,
-        conversation_summary,
-        prior_turns[-DEFAULT_RECENT_TURNS:],
-    )
-
-    return {
-        "messages": normalized_messages,
-        "raw_query": raw_query,
-        "resolved_query": resolved_query,
-        "conversation_summary": conversation_summary,
-        "conversation_context": conversation_context,
-        "task_type": task_type,
-    }
-
-
-async def _run_request(
-    rag_graph: Any,
-    task_llm: Any | None,
-    messages,
-    max_tokens: int | None,
-) -> dict:
-    conversation = _prepare_conversation(messages, max_tokens)
-    if task_llm is not None and conversation["task_type"] != "chat":
-        history = build_auxiliary_history(
-            conversation["messages"],
-            conversation["raw_query"],
-        )
-        prompt = build_auxiliary_prompt(conversation["task_type"], history)
-        return {
-            "answer": await task_llm.complete_prompt(prompt),
-            "citations": [],
-            "task_type": conversation["task_type"],
-            "resolved_query": conversation["resolved_query"],
-        }
-
-    result = await rag_graph.ainvoke(
-        _build_initial_state(
-            raw_query=conversation["raw_query"],
-            resolved_query=conversation["resolved_query"],
-            conversation_summary=conversation["conversation_summary"],
-            conversation_context=conversation["conversation_context"],
-            task_type=conversation["task_type"],
-        )
-    )
-    return {
-        **result,
-        "task_type": conversation["task_type"],
-        "resolved_query": conversation["resolved_query"],
-    }
-
-
 @traceable(name="Execute Chat Turn")
 async def execute_chat_turn(
     rag_graph: Any,
-    task_llm: Any | None,
+    llm: Any | None,
     messages,
     max_tokens: int | None,
+    prompts: PromptsConfig | None = None,
 ) -> dict:
-    result = await _run_request(rag_graph, task_llm, messages, max_tokens)
+    """Route request via detect_intent: direct skips the graph, rag invokes it."""
+    prompts = prompts or PromptsConfig()
+    normalized = normalize_messages(messages)
+    raw_query = extract_latest_user_query(normalized)
+
+    if not raw_query:
+        return {"answer": "", "citations": [], "task_type": "rag", "resolved_query": ""}
+
+    # Serialize messages for detect_intent
+    serialized = [{"role": m.role, "content": m.text_content()} for m in normalized]
+
+    intent = {"route": "rag", "resolved_query": raw_query}
+    if llm is not None and hasattr(llm, "detect_intent"):
+        intent = await llm.detect_intent(serialized)
+
+    route = intent.get("route", "rag")
+    resolved_query = intent.get("resolved_query") or raw_query
+
+    if route == "direct" and llm is not None:
+        answer = await llm.generate(
+            system_prompt=prompts.direct_system_prompt,
+            user_prompt=resolved_query,
+        )
+        return {
+            "answer": answer,
+            "citations": [],
+            "task_type": "direct",
+            "resolved_query": resolved_query,
+        }
+
+    # rag route
+    result = await rag_graph.ainvoke(
+        _build_initial_state(
+            raw_query=raw_query,
+            resolved_query=resolved_query,
+        )
+    )
     return {
         "answer": result.get("answer", ""),
         "citations": result.get("citations", []),
-        "task_type": result.get("task_type", "chat"),
-        "resolved_query": result.get("resolved_query", ""),
+        "task_type": "rag",
+        "resolved_query": resolved_query,
     }
 
 
-def _format_citation(citation: dict) -> str:
-    title = citation.get("title", "") or "Nguồn tham khảo"
-    url = citation.get("url", "") or ""
-    source = citation.get("source", "") or url or "unknown"
-    score = float(citation.get("score", 0.0) or 0.0)
-    title_part = f"[{title}]({url})" if url else title
-    return f"- {title_part} - **{source} ({score:.4f})**"
-
-
-def _chunk_answer(answer: str, chunk_size: int = 64) -> list[str]:
-    if not answer:
-        return []
-    return [answer[index : index + chunk_size] for index in range(0, len(answer), chunk_size)]
-
-
-def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
+def create_chat_router(
+    rag_graph,
+    retrieval_graph=None,
+    task_llm=None,
+    prompts: PromptsConfig | None = None,
+    settings=None,
+) -> APIRouter:
     """Return a fresh APIRouter with /v1/chat/completions bound to the given RAG graph."""
     router = APIRouter()
+    prompts = prompts or PromptsConfig()
 
     @router.post("/v1/chat/completions")
     async def chat_completions(request: ChatRequest):
@@ -180,71 +119,101 @@ def create_chat_router(rag_graph, task_llm=None) -> APIRouter:
 
         request_id = str(uuid.uuid4())[:8]
         with logger.contextualize(request_id=request_id):
+            logger.info("chat request received")
+
+            if request.stream and retrieval_graph is not None:
+                return await _stream_response(request)
+
+            # Non-streaming path
             result = await execute_chat_turn(
                 rag_graph,
                 task_llm,
                 request.messages,
                 request.max_tokens,
+                prompts=prompts,
             )
-
             answer: str = result.get("answer", "")
-            citations: list[dict] = result.get("citations", [])
-
-            if not request.stream:
-                return ChatResponse(
-                    model=request.model,
-                    choices=[
-                        ChatCompletionChoice(
-                            message=AssistantMessage(content=answer),
-                        )
-                    ],
-                )
-
-            async def generate():
-                chunks = _chunk_answer(answer)
-                if chunks:
-                    first_chunk = ChatStreamChunk(
-                        model=request.model,
-                        choices=[
-                            ChatStreamChoice(
-                                delta=ChatDelta(
-                                    role="assistant",
-                                    content=chunks[0],
-                                ),
-                                finish_reason="stop" if len(chunks) == 1 else None,
-                            )
-                        ],
-                    )
-                    yield f"data: {first_chunk.model_dump_json(exclude_none=True)}\n\n"
-
-                    for index, chunk_text in enumerate(chunks[1:], start=1):
-                        is_last = index == len(chunks) - 1
-                        chunk = ChatStreamChunk(
-                            model=request.model,
-                            choices=[
-                                ChatStreamChoice(
-                                    delta=ChatDelta(content=chunk_text),
-                                    finish_reason="stop" if is_last else None,
-                                )
-                            ],
-                        )
-                        yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
-                else:
-                    stop_chunk = ChatStreamChunk(
-                        model=request.model,
-                        choices=[ChatStreamChoice(delta=ChatDelta(), finish_reason="stop")],
-                    )
-                    yield f"data: {stop_chunk.model_dump_json(exclude_none=True)}\n\n"
-
-                yield "data: [DONE]\n\n"
-
-            return StreamingResponse(
-                generate(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
+            return ChatResponse(
+                model=request.model,
+                choices=[ChatCompletionChoice(message=AssistantMessage(content=answer))],
             )
+
+    async def _stream_response(request: ChatRequest):
+        normalized = normalize_messages(request.messages)
+        raw_query = extract_latest_user_query(normalized)
+        serialized = [{"role": m.role, "content": m.text_content()} for m in normalized]
+
+        # Detect intent (direct chat vs RAG)
+        intent = {"route": "rag", "resolved_query": raw_query}
+        if task_llm is not None and hasattr(task_llm, "detect_intent"):
+            intent = await task_llm.detect_intent(serialized)
+
+        route = intent.get("route", "rag")
+        resolved_query = intent.get("resolved_query") or raw_query
+
+        if route == "direct":
+            stream_messages = [
+                {"role": "system", "content": prompts.direct_system_prompt},
+                {"role": "user", "content": resolved_query},
+            ]
+            citation_suffix = ""
+        else:
+            # Run retrieval only — no LLM call, so first token starts after ~2-3s
+            retrieval_state = await retrieval_graph.ainvoke(
+                _build_initial_state(raw_query=raw_query, resolved_query=resolved_query)
+            )
+            final_context = retrieval_state.get("final_context", [])
+
+            if settings is not None:
+                user_prompt = build_generation_prompt(retrieval_state, settings)
+                citation_suffix = (
+                    build_citation_section(final_context, settings.rag.context_limit)
+                    if final_context
+                    else ""
+                )
+            else:
+                user_prompt = resolved_query
+                citation_suffix = ""
+
+            system_prompt = resolve_rag_system_prompt(prompts)
+            stream_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+        async def generate():
+            if task_llm is not None and hasattr(task_llm, "stream_chat"):
+                is_first = True
+                async for delta in task_llm.stream_chat(stream_messages):
+                    role = "assistant" if is_first else None
+                    is_first = False
+                    chunk = ChatStreamChunk(
+                        model=request.model,
+                        choices=[ChatStreamChoice(delta=ChatDelta(role=role, content=delta))],
+                    )
+                    yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+
+                if citation_suffix:
+                    cite_chunk = ChatStreamChunk(
+                        model=request.model,
+                        choices=[ChatStreamChoice(delta=ChatDelta(content=citation_suffix))],
+                    )
+                    yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
+            else:
+                # No streaming support — send empty stop chunk
+                pass
+
+            stop_chunk = ChatStreamChunk(
+                model=request.model,
+                choices=[ChatStreamChoice(delta=ChatDelta(), finish_reason="stop")],
+            )
+            yield f"data: {stop_chunk.model_dump_json(exclude_none=True)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return router

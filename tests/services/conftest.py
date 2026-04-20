@@ -1,3 +1,4 @@
+import importlib.machinery
 import sys
 import types
 from contextlib import nullcontext
@@ -6,9 +7,8 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
-# Register both service paths so `import embedding_app` / `import reranker_app` /
-# `import guard_app` can find the right module when tests are run with
-# PYTHONPATH=services/<name>.
+# Register service paths so `import inference_app` / `import guard_app` can find
+# the right module when tests are run with PYTHONPATH=services/<name>.
 #
 # We use sys.path.append (NOT insert) so that an explicit PYTHONPATH set at
 # invocation time always takes precedence over these fallback entries:
@@ -21,10 +21,18 @@ import numpy as np
 
 _root = Path(__file__).parents[2]
 
-for _service in ("embedding", "reranker", "guard", "asr", "tts"):
+for _service in ("inference",):
     _svc_path = str(_root / "services" / _service)
     if _svc_path not in sys.path:
         sys.path.append(_svc_path)
+
+# FlagEmbedding is not installed in the test env; provide a stub so service
+# modules can import normally and tests can patch the imported symbols.
+if "FlagEmbedding" not in sys.modules:
+    fake_flag_embedding = types.ModuleType("FlagEmbedding")
+    fake_flag_embedding.BGEM3FlagModel = MagicMock(name="BGEM3FlagModel")
+    fake_flag_embedding.FlagReranker = MagicMock(name="FlagReranker")
+    sys.modules["FlagEmbedding"] = fake_flag_embedding
 
 # Test env does not install transformers; provide a lightweight stub so service
 # modules can import normally and tests can patch the imported symbols.
@@ -116,6 +124,9 @@ def _install_torch_stub() -> None:
         max_memory_allocated=lambda: 0,
     )
 
+    # Set __spec__ so importlib.util.find_spec("torch") returns a spec instead of
+    # raising ValueError (triggered by libraries like `datasets` that probe for torch).
+    fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", None)
     sys.modules["torch"] = fake_torch
 
 
@@ -149,7 +160,8 @@ _load_or_stub_sentence_transformers()
 # Evict any already-cached service modules so the next import picks
 # up the correct one from whichever service path is first on sys.path.
 for _mod in (
-    "embedding_app", "reranker_app", "guard_app", "asr_app",
-    "tts_app", "text_preprocessor", "abbreviations",
+    "inference_app",
+    "text_preprocessor",
+    "abbreviations",
 ):
     sys.modules.pop(_mod, None)
