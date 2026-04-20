@@ -13,12 +13,12 @@ RUN apt-get update \
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml ./
+COPY uv.lock ./
 COPY api ./api
 COPY scripts ./scripts
 
-RUN uv pip install --system -e .
+RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 
-# Default runs the orchestrator; override CMD to run ingestion.
-CMD ["uvicorn", "orchestrator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Compose can override the command for orchestrator or ingest.

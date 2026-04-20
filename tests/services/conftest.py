@@ -1,3 +1,4 @@
+import importlib.machinery
 import sys
 import types
 from contextlib import nullcontext
@@ -123,6 +124,9 @@ def _install_torch_stub() -> None:
         max_memory_allocated=lambda: 0,
     )
 
+    # Set __spec__ so importlib.util.find_spec("torch") returns a spec instead of
+    # raising ValueError (triggered by libraries like `datasets` that probe for torch).
+    fake_torch.__spec__ = importlib.machinery.ModuleSpec("torch", None)
     sys.modules["torch"] = fake_torch
 
 

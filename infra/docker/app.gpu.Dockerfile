@@ -13,12 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+COPY pyproject.toml ./
+COPY uv.lock ./
 COPY services ./services
 
-# Install CUDA-compatible torch once. Inference-service deps should be installed
-# in follow-up tasks once the unified inference service is introduced.
-RUN pip install --break-system-packages \
-    torch==2.10.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+# Install shared runtime deps plus CUDA-compatible inference extras once.
+RUN pip install --break-system-packages uv \
+    && uv sync --frozen --no-dev \
+    && pip install --break-system-packages \
+        torch==2.10.0+cu128 \
+        fastapi \
+        uvicorn \
+        FlagEmbedding \
+        --index-url https://download.pytorch.org/whl/cu128
 
-CMD ["python3", "-m", "services.inference.inference_app"]
-
+# Compose can provide the concrete inference service command.
