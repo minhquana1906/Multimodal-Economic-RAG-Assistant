@@ -3,16 +3,19 @@ from __future__ import annotations
 
 TEXT_RESPONSE_INSTRUCTIONS = """
 Yêu cầu định dạng câu trả lời:
-- Trả lời bằng tiếng Việt.
-- Trình bày bằng markdown rõ ràng, tự nhiên, dễ đọc.
-- Mặc định chia câu trả lời thành 2-4 phần chính với header `##`; tiêu đề do bạn tự đặt theo nội dung thay vì dùng mẫu cố định.
+- Trả lời bằng tiếng Việt, câu trả lời lý tưởng là khoảng 1024 tokens (~2500-3000 ký tự).
+- Mặc định chia câu trả lời thành 2-4 phần chính ở định dạng markdown với header `##`; tiêu đề do bạn tự đặt theo nội dung.
 - Ngăn cách các phần bằng một dòng `---` để bố cục rõ ràng hơn.
-- Trong từng phần, ưu tiên văn xuôi tự nhiên và giải thích chi tiết, rõ ràng hơn một chút so với trả lời quá ngắn.
-- Ưu tiên dùng gạch đầu dòng khi đang liệt kê ý, điều kiện, tác động, hoặc đối chiếu nguồn; không lạm dụng bullet point nếu đoạn văn sẽ tự nhiên hơn.
-- Khi cần đối chiếu nguồn hoặc nêu giới hạn dữ liệu, hãy dành một phần riêng với header phù hợp do bạn tự đặt.
-- Văn phong học thuật nhưng dễ hiểu với người dùng phổ thông.
-- Không lan man, không khẳng định quá mức, không tạo mục rỗng không cần thiết.
+- Ưu tiên dùng gạch đầu dòng khi đang liệt kê, dùng bảng khi cần so sánh, dùng đoạn văn khi giải thích hoặc mô tả.
+- Sử dụng giọng điệu ấm áp, lễ phép, không lan man, không khẳng định quá mức, không tạo mục rỗng không cần thiết.
 """.strip()
+
+_CITATION_INSTRUCTION = (
+    "Hướng dẫn trích dẫn: Trích dẫn inline bằng [S1], [S2], ... "
+    "ngay sau mỗi khẳng định có căn cứ. Có thể dùng nhiều ID liên tiếp: [S1][S2]. "
+    "Không tạo nguồn ngoài danh sách đã cung cấp."
+)
+
 
 def _raw_query(state: dict) -> str:
     return state.get("raw_query") or state.get("query", "")
@@ -22,8 +25,9 @@ def _resolved_query(state: dict) -> str:
     return state.get("resolved_query") or _raw_query(state)
 
 
-
-def resolve_prompt_text(prompts, primary_name: str, fallback_name: str | None = None) -> str:
+def resolve_prompt_text(
+    prompts, primary_name: str, fallback_name: str | None = None
+) -> str:
     primary_value = getattr(prompts, primary_name, None)
     if isinstance(primary_value, str) and primary_value.strip():
         return primary_value
@@ -74,22 +78,29 @@ def build_rag_prompt(sources: list[dict]) -> str:
 
 
 def _render_context_block(state: dict, context_limit: int) -> str:
-    return "\n\n".join(
-        (
-            f"Context ID: {item.get('context_id', '')}\n"
-            f"Title: {item.get('title', 'N/A')}\n"
-            f"Source: {item.get('source', '')}\n"
-            f"URL: {item.get('url', '')}\n"
-            f"Content: {item.get('text', '')}"
-        )
-        for item in state.get("final_context", [])[:context_limit]
-    )
+    parts = []
+    for i, item in enumerate(state.get("final_context", [])[:context_limit]):
+        sid = f"S{i + 1}"
+        title = item.get("title") or "N/A"
+        source = item.get("source") or ""
+        url = item.get("url") or ""
+        text = item.get("text") or ""
+        header = f"[{sid}] {title}"
+        if source:
+            header += f" | {source}"
+        if url:
+            header += f" | {url}"
+        parts.append(f"{header}\nContent: {text}")
+    return "\n\n".join(parts)
 
 
 def build_generation_prompt(state: dict, config) -> str:
     prompts = config.prompts
     response_contract = _resolve_response_contract(prompts)
-    retrieved_context = _render_context_block(state, config.rag.context_limit)
+    raw_context = _render_context_block(state, config.rag.context_limit)
+    retrieved_context = (
+        f"{_CITATION_INSTRUCTION}\n\n{raw_context}" if raw_context else ""
+    )
     user_template = resolve_prompt_text(prompts, "rag_user_template", "user_template")
 
     if "{response_contract}" in user_template:

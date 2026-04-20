@@ -18,9 +18,9 @@ from orchestrator.services.web_search import WebSearchClient
 
 def _looks_like_runtime_settings(settings) -> bool:
     return all(
-        hasattr(settings, field)
-        for field in ("observability", "services", "llm")
+        hasattr(settings, field) for field in ("observability", "services", "llm")
     )
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -56,6 +56,7 @@ def create_app() -> FastAPI:
             ),
         )
         rag_graph = build_rag_graph(services, settings)
+        retrieval_graph = build_rag_graph(services, settings, retrieval_only=True)
         try:
             await services.llm.warm_start()
             logger.info("LLM warm-start completed")
@@ -64,9 +65,10 @@ def create_app() -> FastAPI:
         app.include_router(
             create_chat_router(
                 rag_graph,
+                retrieval_graph,
                 services.llm,
-                None,
                 settings.prompts,
+                settings,
             )
         )
         logger.info("RAG graph ready")
@@ -85,7 +87,7 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/models")
     async def models():
-        return {"data": [{"id": "multimodal-economic-rag", "object": "model"}]}
+        return {"data": [{"id": "Economic-RAG-Assistant", "object": "model"}]}
 
     return app
 

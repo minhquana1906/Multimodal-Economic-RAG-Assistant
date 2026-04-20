@@ -83,12 +83,6 @@ def combine_context_sources(
     return {"final_context": final_context, "citation_pool": citation_pool}
 
 
-def _citation_sort_key(item: dict) -> tuple[float, int]:
-    return (
-        float(item.get("score", 0.0) or 0.0),
-        -int(item.get("original_rank", 0) or 0),
-    )
-
 
 def _normalize_citation(item: dict) -> dict:
     source = item.get("source", "") or item.get("url", "") or "unknown"
@@ -102,30 +96,51 @@ def _normalize_citation(item: dict) -> dict:
     }
 
 
-def _format_citation_line(item: dict) -> str:
+def _format_citation_line(sid: str, item: dict) -> str:
     title = item.get("title", "") or "Nguồn tham khảo"
     url = item.get("url", "") or ""
     source = item.get("source", "") or url or "unknown"
     score = float(item.get("score", 0.0) or 0.0)
     title_part = f"[{title}]({url})" if url else title
-    return f"- {title_part} - **{source} ({score:.4f})**"
+    return f"- **[{sid}]** {title_part} — {source} ({score:.4f})"
 
 
-def finalize_citations(state: dict, *, citation_limit: int) -> dict:
+def build_citation_section(final_context: list[dict], context_limit: int) -> str:
+    """Build formatted citation section using [S1], [S2] labels matching generation prompt order."""
+    items = final_context[:context_limit]
+    if not items:
+        return ""
+    lines = [
+        _format_citation_line(f"S{i + 1}", item)
+        for i, item in enumerate(items)
+        if item.get("context_id")
+    ]
+    if not lines:
+        return ""
+    return "\n\n----\n\n### Nguồn trích dẫn\n" + "\n".join(lines)
+
+
+def finalize_citations(state: dict, *, context_limit: int, citation_limit: int) -> dict:
+    final_context = state.get("final_context", [])
     citation_pool = state.get("citation_pool", {})
-    candidates = sorted(
-        citation_pool.values(),
-        key=_citation_sort_key,
-        reverse=True,
-    )[:citation_limit]
 
-    citations = [_normalize_citation(item) for item in candidates]
+    # Use final_context order so [S1], [S2] labels match what model was shown
+    ordered_items = [
+        citation_pool[item["context_id"]]
+        for item in final_context[:context_limit]
+        if item.get("context_id") and item["context_id"] in citation_pool
+    ][:citation_limit]
+
+    citations = [_normalize_citation(item) for item in ordered_items]
     answer = (state.get("answer") or "").rstrip()
     answer = _CITATION_PATTERN.sub("", answer)
     answer = re.sub(r"[ ]{2,}", " ", answer).strip()
 
     if citations and state.get("response_mode") != "audio":
-        citation_lines = "\n".join(_format_citation_line(item) for item in candidates)
+        citation_lines = "\n".join(
+            _format_citation_line(f"S{i + 1}", item)
+            for i, item in enumerate(ordered_items)
+        )
         answer = f"{answer}\n\n----\n\n### Nguồn trích dẫn\n{citation_lines}"
 
     return {"answer": answer, "citations": citations}

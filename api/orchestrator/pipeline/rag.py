@@ -39,8 +39,12 @@ def _resolved_query(state: RAGState) -> str:
     return state.get("resolved_query") or state.get("raw_query") or state.get("query", "")
 
 
-def build_rag_graph(services, config):
-    """Build and compile the slim LangGraph RAG workflow."""
+def build_rag_graph(services, config, *, retrieval_only: bool = False):
+    """Build and compile the LangGraph RAG workflow.
+
+    retrieval_only=True stops after combine_context — use for streaming
+    where generation is streamed outside the graph.
+    """
 
     async def embed_node(state: RAGState) -> dict:
         try:
@@ -115,6 +119,7 @@ def build_rag_graph(services, config):
     async def citations_node(state: RAGState) -> dict:
         return finalize_citations(
             state,
+            context_limit=config.rag.context_limit,
             citation_limit=config.rag.citation_limit,
         )
 
@@ -128,16 +133,20 @@ def build_rag_graph(services, config):
     workflow.add_node("rerank", rerank_node)
     workflow.add_node("web_fallback", web_fallback_node)
     workflow.add_node("combine_context", combine_context_node)
-    workflow.add_node("generate", generate_node)
-    workflow.add_node("citations", citations_node)
 
     workflow.add_edge(START, "embed")
     workflow.add_conditional_edges("embed", route_after_embed)
     workflow.add_edge("retrieve", "rerank")
     workflow.add_edge("rerank", "web_fallback")
     workflow.add_edge("web_fallback", "combine_context")
-    workflow.add_edge("combine_context", "generate")
-    workflow.add_edge("generate", "citations")
-    workflow.add_edge("citations", END)
+
+    if retrieval_only:
+        workflow.add_edge("combine_context", END)
+    else:
+        workflow.add_node("generate", generate_node)
+        workflow.add_node("citations", citations_node)
+        workflow.add_edge("combine_context", "generate")
+        workflow.add_edge("generate", "citations")
+        workflow.add_edge("citations", END)
 
     return workflow.compile()

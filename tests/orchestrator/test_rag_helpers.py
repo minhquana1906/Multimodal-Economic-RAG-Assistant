@@ -63,7 +63,8 @@ def test_build_generation_prompt_uses_modular_prompt_parts():
     prompt = build_generation_prompt(state, config)
 
     assert "Tra loi bang markdown voi header `##`." in prompt
-    assert "Context ID: hybrid:1" in prompt
+    assert "[S1]" in prompt
+    assert "GDP" in prompt
     assert "Cau hoi da lam ro" in prompt
 
 
@@ -84,7 +85,7 @@ def test_finalize_citations_appends_footer_and_normalizes_output():
         }
     }
 
-    result = finalize_citations(state, citation_limit=5)
+    result = finalize_citations(state, context_limit=5, citation_limit=5)
 
     assert result["citations"] == [
         {

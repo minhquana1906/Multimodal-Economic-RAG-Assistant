@@ -116,6 +116,7 @@ def _initial_state(query="GDP Việt Nam?"):
 def _answer_with_footer(
     body: str,
     *,
+    sid: str = "S1",
     title: str,
     url: str,
     source: str,
@@ -125,7 +126,7 @@ def _answer_with_footer(
         f"{body}\n\n"
         "----\n\n"
         "### Nguồn trích dẫn\n"
-        f"- [{title}]({url}) - **{source} ({score:.4f})**"
+        f"- **[{sid}]** [{title}]({url}) — {source} ({score:.4f})"
     )
 
 
@@ -330,9 +331,9 @@ async def test_generation_prompt_contains_context_ids_and_source_metadata():
     await graph.ainvoke(_initial_state())
 
     prompt = services.llm.generate.await_args_list[0].kwargs["user_prompt"]
-    assert "hybrid:1" in prompt
+    assert "[S1]" in prompt
     assert "https://example.com/gdp" in prompt
-    assert "Source:" in prompt
+    assert "src.com" in prompt
     assert "header `##`" in prompt
     assert "`---`" in prompt
     assert "### Phân tích chính" not in prompt
@@ -525,7 +526,7 @@ async def test_rag_pipeline_text_mode_appends_web_citation_footer():
 
     assert result["answer"].startswith("Fed giữ nguyên lãi suất")
     assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
-    assert "- [Web](https://web.com/article) - **web.com (0.9200)**" in result["answer"]
+    assert "- **[S1]** [Web](https://web.com/article) — web.com (0.9200)" in result["answer"]
     assert len(result["citations"]) == 2
     assert result["citations"][0]["source_type"] == "web"
 
@@ -629,7 +630,7 @@ async def test_rag_pipeline_web_fallback_triggered():
     assert any(c["source"] == "web.com" for c in result["final_context"])
     assert result["answer"].startswith("Answer with web")
     assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
-    assert "- [Web](https://web.com/article) - **web.com (0.4200)**" in result["answer"]
+    assert "- **[S1]** [Web](https://web.com/article) — web.com (0.4200)" in result["answer"]
 
 
 @pytest.mark.asyncio

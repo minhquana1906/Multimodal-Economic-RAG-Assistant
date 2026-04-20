@@ -62,8 +62,29 @@ def _make_app(
 
     mock_task_llm.stream_chat = _stream_chat
 
+    # Retrieval-only graph mock: returns empty context (streaming path skips LLM)
+    mock_retrieval_graph = MagicMock()
+    mock_retrieval_graph.ainvoke = AsyncMock(
+        return_value={
+            "final_context": [],
+            "citation_pool": {},
+            "embeddings": [],
+            "retrieved_docs": [],
+            "reranked_docs": [],
+            "web_results": [],
+            "error": None,
+        }
+    )
+
     app = FastAPI()
-    app.include_router(create_chat_router(mock_graph, mock_task_llm, prompts))
+    app.include_router(
+        create_chat_router(
+            mock_graph,
+            retrieval_graph=mock_retrieval_graph,
+            task_llm=mock_task_llm,
+            prompts=prompts,
+        )
+    )
     return app, mock_graph, mock_task_llm, prompts
 
 

@@ -40,7 +40,7 @@ async def test_create_app_wires_inference_client(monkeypatch):
     monkeypatch.setattr(main, "LLMClient", lambda *args, **kwargs: llm_client)
     monkeypatch.setattr(main, "WebSearchClient", lambda *args, **kwargs: object())
 
-    def fake_build_rag_graph(services, config):
+    def fake_build_rag_graph(services, config, **kwargs):
         captured["services"] = services
         return object()
 
@@ -48,7 +48,7 @@ async def test_create_app_wires_inference_client(monkeypatch):
     monkeypatch.setattr(
         main,
         "create_chat_router",
-        lambda graph, llm, guard=None, prompts=None: APIRouter(),
+        lambda *args, **kwargs: APIRouter(),
     )
 
     app = main.create_app()
@@ -89,11 +89,7 @@ async def test_create_app_startup_ignores_warm_start_failure(monkeypatch):
     monkeypatch.setattr(main, "RetrieverClient", lambda *args, **kwargs: object())
     monkeypatch.setattr(main, "WebSearchClient", lambda *args, **kwargs: object())
     monkeypatch.setattr(main, "build_rag_graph", lambda *args, **kwargs: object())
-    monkeypatch.setattr(
-        main,
-        "create_chat_router",
-        lambda graph, llm, guard=None, prompts=None: APIRouter(),
-    )
+    monkeypatch.setattr(main, "create_chat_router", lambda *args, **kwargs: APIRouter())
 
     llm_client = SimpleNamespace(warm_start=AsyncMock(side_effect=RuntimeError("cold start")))
     monkeypatch.setattr(main, "LLMClient", lambda *args, **kwargs: llm_client)

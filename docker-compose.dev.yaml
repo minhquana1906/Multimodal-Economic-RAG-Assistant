@@ -22,8 +22,10 @@ volumes:
     open-webui:
 
 services:
+
+    # ── Vector store ─────────────────────────────────────────────────────────────
     qdrant:
-        image: qdrant/qdrant:v1.17.0
+        image: qdrant/qdrant:v1.17.1
         hostname: qdrant
         ports:
             - "6333:6333"
@@ -39,6 +41,7 @@ services:
             retries: 5
             start_period: 10s
 
+    # ── Embedding / rerank inference (hot-reload via bind mount) ─────────────────
     inference:
         <<: *gpu-reservation
         build:
@@ -53,24 +56,22 @@ services:
             <<: *hf-cache-env
         volumes:
             - *hf-cache-volume
-            - ./services/inference:/app
-        command: uvicorn inference_app:app --host 0.0.0.0 --port 8001 --reload
+            - ./services/inference:/app/services/inference
+        command: uvicorn services.inference.inference_app:app --host 0.0.0.0 --port 8001 --reload
         networks:
             - rag-net
         healthcheck:
             test:
                 [
-                    "CMD",
-                    "python",
-                    "-c",
-                    "import urllib.request;
-                      urllib.request.urlopen('http://localhost:8001/health')",
+                    "CMD", "python", "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
                 ]
             interval: 10s
             timeout: 5s
             retries: 12
             start_period: 120s
 
+    # ── LLM backend ──────────────────────────────────────────────────────────────
     llm:
         <<: *gpu-reservation
         image: vllm/vllm-openai:v0.18.0-x86_64-cu130
@@ -85,7 +86,7 @@ services:
             - *hf-cache-volume
         command:
             - --host
-            - 0.0.0.0
+            - "0.0.0.0"
             - --port
             - "8004"
             - --model
@@ -93,9 +94,20 @@ services:
             - --served-model-name
             - ${LLM__MODEL}
             - --gpu-memory-utilization
-            - ${VLLM_LLM_GPU_MEMORY_UTILIZATION:-0.90}
+            - ${VLLM__GPU_MEMORY_UTILIZATION:-0.75}
+            - --dtype
+            - ${VLLM__DTYPE:-half}
             - --max-model-len
-            - ${VLLM_LLM_MAX_MODEL_LEN:-8192}
+            - ${VLLM__MAX_MODEL_LEN:-4096}
+            - --max-num-batched-tokens
+            - ${VLLM__MAX_NUM_BATCHED_TOKENS:-2048}
+            - --max-num-seqs
+            - ${VLLM__MAX_NUM_SEQS:-4}
+            - --kv-cache-dtype
+            - ${VLLM__KV_CACHE_DTYPE:-auto}
+            - --enable-prefix-caching
+            - --quantization
+            - ${VLLM__QUANTIZATION:-compressed-tensors}
         networks:
             - rag-net
         healthcheck:
@@ -105,6 +117,7 @@ services:
             retries: 5
             start_period: 240s
 
+    # ── RAG orchestrator (hot-reload via bind mount) ──────────────────────────────
     orchestrator:
         build:
             context: .
@@ -115,7 +128,7 @@ services:
         env_file:
             - .env
         volumes:
-            - ./api:/app
+            - ./api:/app/api
         command: uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000 --reload
         networks:
             - rag-net
@@ -129,17 +142,15 @@ services:
         healthcheck:
             test:
                 [
-                    "CMD",
-                    "python",
-                    "-c",
-                    "import urllib.request;
-                      urllib.request.urlopen('http://localhost:8000/health')",
+                    "CMD", "python", "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
                 ]
             interval: 10s
             timeout: 5s
             retries: 5
             start_period: 15s
 
+    # ── Chat UI ───────────────────────────────────────────────────────────────────
     webui:
         image: ghcr.io/open-webui/open-webui:v0.8.10
         hostname: webui
@@ -154,11 +165,11 @@ services:
             WEBUI_AUTH: "true"
             ENABLE_SIGNUP: "true"
             ENABLE_LOGIN_FORM: "true"
-            DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
-            WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
+            ENABLE_TAGS_GENERATION: "false"
             ENABLE_FOLLOW_UP_GENERATION: "false"
             ENABLE_TITLE_GENERATION: "false"
-            ENABLE_TAGS_GENERATION: "false"
+            DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Economic-RAG-Assistant}
+            WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
         volumes:
             - open-webui:/app/backend/data
         networks:
@@ -167,6 +178,7 @@ services:
             orchestrator:
                 condition: service_healthy
 
+    # ── Cloudflare tunnel ─────────────────────────────────────────────────────────
     tunnel:
         image: cloudflare/cloudflared:2026.3.0
         hostname: tunnel
@@ -177,28 +189,3 @@ services:
         depends_on:
             - webui
         restart: unless-stopped
-
-    ingest:
-        build:
-            context: .
-            dockerfile: infra/docker/app.cpu.Dockerfile
-        environment:
-            SERVICES__INFERENCE_URL: ${SERVICES__INFERENCE_URL}
-            SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
-            SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
-            INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
-            HF_TOKEN: ${HF_TOKEN}
-            <<: *hf-cache-env
-        volumes:
-            - *hf-cache-volume
-            - ./scripts:/app
-        command: python ingest.py
-        networks:
-            - rag-net
-        depends_on:
-            qdrant:
-                condition: service_healthy
-            inference:
-                condition: service_healthy
-        profiles:
-            - ingest
