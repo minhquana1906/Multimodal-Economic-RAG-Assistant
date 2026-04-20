@@ -1,0 +1,383 @@
+x-hf-cache-env: &hf-cache-env
+  HF_HOME: /data/huggingface
+  HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
+  TRANSFORMERS_CACHE: /data/huggingface/hub
+
+x-gpu-0: &gpu-0
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0"]
+            capabilities: [gpu]
+
+x-gpu-1: &gpu-1
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["1"]
+            capabilities: [gpu]
+
+networks:
+  rag-net:
+    driver: bridge
+
+volumes:
+  hf_cache:
+  qdrant_storage:
+  open-webui:
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    hostname: qdrant
+    pull_policy: always
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - rag-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  embedding:
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-embedding:${IMAGE_TAG:-latest}
+    hostname: embedding
+    pull_policy: always
+    ports:
+      - "8001:8001"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
+      ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
+      <<: *hf-cache-env
+    volumes:
+      - hf_cache:/data/huggingface
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  reranker:
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-reranker:${IMAGE_TAG:-latest}
+    hostname: reranker
+    pull_policy: always
+    ports:
+      - "8002:8002"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
+      <<: *hf-cache-env
+    volumes:
+      - hf_cache:/data/huggingface
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  guard:
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-guard:${IMAGE_TAG:-latest}
+    hostname: guard
+    pull_policy: always
+    ports:
+      - "8003:8003"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      GUARD_MODEL: ${SERVICES__GUARD_MODEL}
+      GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
+      <<: *hf-cache-env
+    volumes:
+      - hf_cache:/data/huggingface
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  llm:
+    <<: *gpu-1
+    image: vllm/vllm-openai:v0.18.0-x86_64-cu130
+    hostname: llm
+    pull_policy: always
+    ipc: host
+    ports:
+      - "8004:8004"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8004"
+      - --model
+      - ${LLM__MODEL}
+      - --served-model-name
+      - ${LLM__MODEL}
+      - --gpu-memory-utilization
+      - ${VLLM_LLM_GPU_MEMORY_UTILIZATION}
+      - --max-model-len
+      - ${VLLM_LLM_MAX_MODEL_LEN}
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 240s
+
+  vlm:
+    <<: *gpu-1
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.18.0-x86_64-cu130}
+    hostname: vlm
+    pull_policy: always
+    ipc: host
+    ports:
+      - "8007:8007"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8007"
+      - --model
+      - ${VLM_MODEL}
+      - --served-model-name
+      - ${VLM_MODEL}
+      - --gpu-memory-utilization
+      - ${VLLM_VLM_GPU_MEMORY_UTILIZATION}
+      - --max-model-len
+      - ${VLLM_VLM_MAX_MODEL_LEN}
+      - --limit-mm-per-prompt
+      - image=1
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 240s
+
+  orchestrator:
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-orchestrator:${IMAGE_TAG:-latest}
+    hostname: orchestrator
+    pull_policy: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.vast
+    environment:
+      LLM__URL: ${LLM__URL}
+      LLM__MODEL: ${LLM__MODEL}
+    networks:
+      - rag-net
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
+      guard:
+        condition: service_healthy
+      llm:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  webui:
+    image: ghcr.io/open-webui/open-webui:v0.7.2
+    hostname: webui
+    pull_policy: always
+    ports:
+      - "8080:8080"
+    environment:
+      OPENAI_API_BASE_URL: ${OPENAI_API_BASE_URL:-http://orchestrator:8000/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      ENABLE_RAG_WEB_SEARCH: "false"
+      ENABLE_IMAGE_GENERATION: "false"
+      WEBUI_AUTH: "true"
+      ENABLE_SIGNUP: "true"
+      ENABLE_LOGIN_FORM: "true"
+      DEFAULT_MODELS: ${WEBUI_DEFAULT_MODELS:-Multimodal-Economic-RAG}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-admin}
+    volumes:
+      - open-webui:/app/backend/data
+    networks:
+      - rag-net
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+
+  tunnel:
+    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-2026.3.0}
+    hostname: tunnel
+    pull_policy: always
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - rag-net
+    depends_on:
+      - webui
+    restart: unless-stopped
+
+  ingest:
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-ingest:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment:
+      SERVICES__EMBEDDING_URL: ${SERVICES__EMBEDDING_URL}
+      SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
+      SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
+      INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      <<: *hf-cache-env
+    volumes:
+      - hf_cache:/data/huggingface
+    networks:
+      - rag-net
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+    profiles:
+      - ingest
+
+  asr:
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-asr:${IMAGE_TAG:-latest}
+    hostname: asr
+    pull_policy: always
+    ports:
+      - "8005:8005"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      ASR_MODEL: ${SERVICES__ASR_MODEL}
+      ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
+      ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
+      <<: *hf-cache-env
+    volumes:
+      - hf_cache:/data/huggingface
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - audio
+
+  tts:
+    <<: *gpu-0
+    image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-tts:${IMAGE_TAG:-latest}
+    hostname: tts
+    pull_policy: always
+    ports:
+      - "8006:8006"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      TTS_MODEL: ${SERVICES__TTS_MODEL}
+      TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
+      TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
+      TTS_SPEED: ${SERVICES__TTS_SPEED}
+      <<: *hf-cache-env
+    volumes:
+      - hf_cache:/data/huggingface
+    networks:
+      - rag-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - audio

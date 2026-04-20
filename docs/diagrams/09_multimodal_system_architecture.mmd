@@ -1,0 +1,63 @@
+flowchart TB
+    subgraph access["Access Layer"]
+        tunnel["Cloudflare<br/>Tunnel"]
+        webui["Open WebUI<br/>:8080"]
+    end
+
+    subgraph local["Local Machine - RTX 3060 (12 GB)"]
+        subgraph net["Docker Network: rag-net"]
+            orch["Orchestrator<br/>FastAPI + LangGraph<br/>:8000"]
+
+            subgraph always_on["Always-on GPU Services (~3.6 GB)"]
+                emb["Embedding<br/>:8001<br/>1.2 GB"]
+                rrk["Reranker<br/>:8002<br/>1.2 GB"]
+                grd["Guard<br/>:8003<br/>1.2 GB"]
+            end
+
+            subgraph on_demand["On-demand GPU Services"]
+                asr["ASR<br/>:8005<br/>~3.4 GB"]
+                tts["TTS<br/>:8006<br/>~2-3 GB"]
+            end
+
+            qdrant["Qdrant<br/>econ_vn_news<br/>econ_knowledge"]
+        end
+
+        subgraph fs["Local Data Store"]
+            raw["data/raw"]
+            parsed["data/parsed"]
+            images["data/images"]
+        end
+    end
+
+    subgraph remote["Remote Services / Internet"]
+        llm["vLLM / Qwen3.5-4B<br/>:8004"]
+        vlm["VLM / Qwen3-VL-4B<br/>:8007"]
+        tavily["Tavily Search API"]
+    end
+
+    tunnel --> webui
+    webui --> orch
+
+    orch --> emb
+    orch --> rrk
+    orch --> grd
+    orch --> asr
+    orch --> tts
+    orch --> qdrant
+    orch --> llm
+    orch --> vlm
+    orch --> tavily
+
+    qdrant --- raw
+    qdrant --- parsed
+    qdrant --- images
+
+    classDef gpu fill:#ef4444,color:#fff,stroke:#991b1b
+    classDef service fill:#0ea5e9,color:#fff,stroke:#075985
+    classDef storage fill:#22c55e,color:#fff,stroke:#166534
+    classDef remote fill:#facc15,color:#111827,stroke:#a16207
+
+    class emb,rrk,grd,asr,tts gpu
+    class orch,webui,tunnel service
+    class qdrant,raw,parsed,images storage
+    class llm,vlm,tavily remote
