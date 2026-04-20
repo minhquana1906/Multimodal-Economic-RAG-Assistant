@@ -20,6 +20,7 @@ docker-compose.override.yml
 
 # Qdrant local data
 qdrant_storage/
+data/*.snapshot
 
 # Model cache (HuggingFace / vLLM weight directories — not Python packages)
 **/model_cache/
