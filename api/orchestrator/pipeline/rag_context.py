@@ -4,6 +4,8 @@ import re
 
 
 _CITATION_PATTERN = re.compile(r"\[\[cite:([a-zA-Z0-9:_-]+)\]\]")
+_INLINE_CITATION_RE = re.compile(r"\*{0,2}\[S(\d+)\]\*{0,2}")
+_CODE_FENCE_RE = re.compile(r"(```.*?```)", re.DOTALL)
 
 
 def build_context_item(
@@ -83,7 +85,6 @@ def combine_context_sources(
     return {"final_context": final_context, "citation_pool": citation_pool}
 
 
-
 def _normalize_citation(item: dict) -> dict:
     source = item.get("source", "") or item.get("url", "") or "unknown"
     return {
@@ -102,7 +103,31 @@ def _format_citation_line(sid: str, item: dict) -> str:
     source = item.get("source", "") or url or "unknown"
     score = float(item.get("score", 0.0) or 0.0)
     title_part = f"[{title}]({url})" if url else title
-    return f"- **[{sid}]** {title_part} — {source} ({score:.4f})"
+    return f"- [{sid}] {title_part} — {source} ({score:.4f})"
+
+
+def rewrite_inline_citations(answer: str, citations: list[dict]) -> str:
+    r"""Replace [Sn] markers with [\[Sn\]](url) markdown links using source URLs.
+
+    Skips content inside fenced code blocks. Citations with no URL are left unchanged.
+    """
+    if not citations:
+        return answer
+
+    url_map = {i + 1: (c.get("url") or "") for i, c in enumerate(citations)}
+
+    def _replace(m: re.Match) -> str:
+        n = int(m.group(1))
+        if n < 1 or n > len(citations):
+            return m.group(0)
+        url = url_map.get(n, "")
+        return f"[\\[S{n}\\]]({url})" if url else m.group(0)
+
+    parts = _CODE_FENCE_RE.split(answer)
+    return "".join(
+        _INLINE_CITATION_RE.sub(_replace, part) if i % 2 == 0 else part
+        for i, part in enumerate(parts)
+    )
 
 
 def build_citation_section(final_context: list[dict], context_limit: int) -> str:
@@ -135,6 +160,9 @@ def finalize_citations(state: dict, *, context_limit: int, citation_limit: int) 
     answer = (state.get("answer") or "").rstrip()
     answer = _CITATION_PATTERN.sub("", answer)
     answer = re.sub(r"[ ]{2,}", " ", answer).strip()
+
+    # Rewrite [Sn] to [\[Sn\]](url) backlinks — only runs for non-streaming (buffered) answers
+    answer = rewrite_inline_citations(answer, citations)
 
     if citations and state.get("response_mode") != "audio":
         citation_lines = "\n".join(
