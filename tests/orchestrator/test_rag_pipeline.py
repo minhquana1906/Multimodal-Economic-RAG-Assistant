@@ -126,7 +126,7 @@ def _answer_with_footer(
         f"{body}\n\n"
         "----\n\n"
         "### Nguồn trích dẫn\n"
-        f"- **[{sid}]** [{title}]({url}) — {source} ({score:.4f})"
+        f'- [{sid}] [{title}]({url}) — {source} ({score:.4f})'
     )
 
 
@@ -526,7 +526,7 @@ async def test_rag_pipeline_text_mode_appends_web_citation_footer():
 
     assert result["answer"].startswith("Fed giữ nguyên lãi suất")
     assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
-    assert "- **[S1]** [Web](https://web.com/article) — web.com (0.9200)" in result["answer"]
+    assert '- [S1] [Web](https://web.com/article) — web.com (0.9200)' in result["answer"]
     assert len(result["citations"]) == 2
     assert result["citations"][0]["source_type"] == "web"
 
@@ -630,7 +630,7 @@ async def test_rag_pipeline_web_fallback_triggered():
     assert any(c["source"] == "web.com" for c in result["final_context"])
     assert result["answer"].startswith("Answer with web")
     assert "\n\n----\n\n### Nguồn trích dẫn\n" in result["answer"]
-    assert "- **[S1]** [Web](https://web.com/article) — web.com (0.4200)" in result["answer"]
+    assert '- [S1] [Web](https://web.com/article) — web.com (0.4200)' in result["answer"]
 
 
 @pytest.mark.asyncio
