@@ -89,7 +89,9 @@ def build_rag_graph(services, config, *, retrieval_only: bool = False):
         return {"reranked_docs": ranked[: config.rag.rerank_top_n]}
 
     async def web_fallback_node(state: RAGState) -> dict:
-        if should_add_web_fallback(state, config):
+        use_web, reason = should_add_web_fallback(state, config)
+        logger.info(f"web_fallback decision={use_web} reason={reason}")
+        if use_web:
             web_results = await services.web_search.search(_resolved_query(state))
             return {"web_results": web_results}
         return {"web_results": []}
