@@ -26,16 +26,12 @@ class RAGState(TypedDict):
     conversation_context: str
     task_type: str
     response_mode: Literal["text", "audio"]
-    input_safe: bool
     embeddings: list[float]
     retrieved_docs: list[dict]
     reranked_docs: list[dict]
     web_results: list[dict]
     final_context: list[dict]
     answer: str
-    output_safe: bool
-    input_guard_result: dict
-    output_guard_result: dict
     generation_prompt: str
     citations: list[dict]
     citation_pool: dict[str, dict]

@@ -46,14 +46,6 @@ def _make_state():
     }
 
 
-def test_build_denial_message_maps_known_category():
-    from orchestrator.pipeline.rag_guard import build_denial_message
-
-    message = build_denial_message("Xin lỗi.", ["Violent"])
-
-    assert message == "Xin lỗi. Lý do: nội dung liên quan đến bạo lực."
-
-
 def test_should_add_web_fallback_for_time_sensitive_query():
     from orchestrator.pipeline.rag_policy import should_add_web_fallback
 
