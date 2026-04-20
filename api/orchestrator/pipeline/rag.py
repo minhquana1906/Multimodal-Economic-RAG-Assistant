@@ -9,7 +9,6 @@ from orchestrator.pipeline.rag_context import (
     combine_context_sources,
     finalize_citations,
 )
-from orchestrator.pipeline.rag_guard import build_denial_message, build_retry_prompt
 from orchestrator.pipeline.rag_policy import should_add_web_fallback
 from orchestrator.pipeline.rag_prompts import (
     build_generation_prompt,
@@ -48,20 +47,7 @@ def _resolved_query(state: RAGState) -> str:
 
 
 def build_rag_graph(services, config):
-    """Build and compile the LangGraph RAG workflow."""
-
-    async def input_guard_node(state: RAGState) -> dict:
-        guard_result = await services.guard.check_input(_resolved_query(state))
-        if guard_result["label"] != "safe":
-            return {
-                "input_safe": False,
-                "input_guard_result": guard_result,
-                "answer": build_denial_message(
-                    config.prompts.apology_message,
-                    guard_result.get("categories", []),
-                ),
-            }
-        return {"input_safe": True, "input_guard_result": guard_result}
+    """Build and compile the slim LangGraph RAG workflow."""
 
     async def embed_node(state: RAGState) -> dict:
         try:
@@ -133,82 +119,32 @@ def build_rag_graph(services, config):
         )
         return {"answer": answer, "generation_prompt": user_prompt}
 
-    async def output_guard_node(state: RAGState) -> dict:
-        guard_result = await services.guard.check_output(
-            text=state["answer"],
-            prompt=_resolved_query(state),
-        )
-        if guard_result["label"] == "safe":
-            return {"output_safe": True, "output_guard_result": guard_result}
-
-        if state.get("generation_prompt"):
-            retry_prompt = build_retry_prompt(
-                original_prompt=state["generation_prompt"],
-                unsafe_answer=state["answer"],
-                guard_result=guard_result,
-            )
-            system_prompt = resolve_rag_system_prompt(config.prompts)
-            retry_answer = await services.llm.generate(
-                system_prompt=system_prompt,
-                user_prompt=retry_prompt,
-            )
-            retry_guard_result = await services.guard.check_output(
-                text=retry_answer,
-                prompt=_resolved_query(state),
-            )
-            if retry_guard_result["label"] == "safe":
-                return {
-                    "answer": retry_answer,
-                    "output_safe": True,
-                    "output_guard_result": retry_guard_result,
-                }
-            guard_result = retry_guard_result
-
-        return {
-            "output_safe": False,
-            "output_guard_result": guard_result,
-            "answer": build_denial_message(
-                config.prompts.guard_error_message,
-                guard_result.get("categories", []),
-            ),
-        }
-
     async def citations_node(state: RAGState) -> dict:
         return finalize_citations(
             state,
             citation_limit=config.rag.citation_limit,
         )
 
-    def route_after_input_guard(state: RAGState) -> Literal["embed", "__end__"]:
-        return "embed" if state["input_safe"] else "__end__"
-
     def route_after_embed(state: RAGState) -> Literal["retrieve", "__end__"]:
         return "__end__" if state.get("error") else "retrieve"
 
-    def route_after_output_guard(state: RAGState) -> Literal["citations", "__end__"]:
-        return "citations" if state["output_safe"] else "__end__"
-
     workflow = StateGraph(RAGState)
 
-    workflow.add_node("input_guard", input_guard_node)
     workflow.add_node("embed", embed_node)
     workflow.add_node("retrieve", retrieve_node)
     workflow.add_node("rerank", rerank_node)
     workflow.add_node("web_fallback", web_fallback_node)
     workflow.add_node("combine_context", combine_context_node)
     workflow.add_node("generate", generate_node)
-    workflow.add_node("output_guard", output_guard_node)
     workflow.add_node("citations", citations_node)
 
-    workflow.add_edge(START, "input_guard")
-    workflow.add_conditional_edges("input_guard", route_after_input_guard)
+    workflow.add_edge(START, "embed")
     workflow.add_conditional_edges("embed", route_after_embed)
     workflow.add_edge("retrieve", "rerank")
     workflow.add_edge("rerank", "web_fallback")
     workflow.add_edge("web_fallback", "combine_context")
     workflow.add_edge("combine_context", "generate")
-    workflow.add_edge("generate", "output_guard")
-    workflow.add_conditional_edges("output_guard", route_after_output_guard)
+    workflow.add_edge("generate", "citations")
     workflow.add_edge("citations", END)
 
     return workflow.compile()

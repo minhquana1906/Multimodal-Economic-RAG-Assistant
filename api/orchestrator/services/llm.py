@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 from langsmith import traceable
@@ -80,6 +81,56 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Auxiliary LLM generation error: {e}")
             return ""
+
+    async def detect_intent(self, messages: list[dict[str, str]]) -> dict[str, str]:
+        """Return routing intent for the conversation.
+
+        Returns {"route": "direct"|"rag", "resolved_query": "..."}.
+        Falls back to {"route": "rag", "resolved_query": last_user_message} on invalid JSON.
+        """
+        last_user = next(
+            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )
+        messages_text = "\n".join(
+            f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in messages
+        )
+        system_prompt = (
+            "Bạn là bộ định tuyến route cho trợ lý kinh tế - tài chính.\n"
+            "Chỉ trả về JSON hợp lệ với hai khóa: route và resolved_query.\n"
+            'route phải là "direct" hoặc "rag".\n'
+            "direct: câu hỏi đơn giản, chào hỏi, yêu cầu viết lại, không cần tìm kiếm tài liệu.\n"
+            "rag: câu hỏi về kinh tế, tài chính, số liệu, phân tích, cần tra cứu tài liệu.\n"
+            "Nếu không chắc, chọn rag."
+        )
+        user_prompt = (
+            "Phân tích các tin nhắn sau và trả về JSON theo đúng schema đã yêu cầu.\n\n"
+            f"{messages_text}"
+        )
+        try:
+            content, _, _ = await self._create_completion(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=128,
+            )
+            raw = (content or "").strip()
+            # Strip markdown code block if present
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            parsed = json.loads(raw)
+            route = parsed.get("route", "rag")
+            if route not in ("direct", "rag"):
+                route = "rag"
+            resolved_query = parsed.get("resolved_query") or last_user
+            return {"route": route, "resolved_query": resolved_query}
+        except Exception as e:
+            logger.warning(f"detect_intent failed, defaulting to rag: {e}")
+            return {"route": "rag", "resolved_query": last_user}
 
     async def warm_start(self) -> None:
         """Send a minimal request to reduce first-token latency after startup."""

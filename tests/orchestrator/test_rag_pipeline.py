@@ -273,14 +273,9 @@ async def test_rag_pipeline_uses_resolved_query_for_retrieval_and_guards():
         source="src.com",
         score=0.9,
     )
-    services.guard.check_input.assert_awaited_once_with(resolved_query)
     services.inference.embed_query.assert_awaited_once_with(resolved_query)
     services.inference.rerank.assert_awaited_once()
     assert services.inference.rerank.await_args.kwargs["query"] == resolved_query
-    services.guard.check_output.assert_awaited_once_with(
-        text="GDP tăng 7% [[cite:hybrid:1]]",
-        prompt=resolved_query,
-    )
 
 
 @pytest.mark.asyncio
@@ -719,7 +714,6 @@ async def test_rag_pipeline_happy_path():
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["input_safe"] is True
     assert result["answer"] == _answer_with_footer(
         "GDP tăng 7%",
         title="GDP",
@@ -727,7 +721,6 @@ async def test_rag_pipeline_happy_path():
         source="src.com",
         score=0.9,
     )
-    assert result["output_safe"] is True
     assert len(result["citations"]) == 1
     assert result["citations"][0]["title"] == "GDP"
     assert result["citations"][0]["url"] == "https://example.com/gdp"
@@ -738,20 +731,22 @@ async def test_rag_pipeline_happy_path():
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_unsafe_input_uses_category_reason():
-    """Unsafe input returns informative denial text and skips generation."""
+    """Slim graph: input guard removed, embed always called regardless of content."""
     from orchestrator.pipeline.rag import build_rag_graph
 
-    services = _make_services(input_guard_result=UNSAFE_VIOLENT_RESULT)
-    config = _make_config()
+    services = _make_services(
+        retrieved_docs=[],
+        reranked=[],
+        web_results=[],
+    )
+    config = _make_config(fallback_min_chunks=0)
     graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["input_safe"] is False
-    assert result["answer"].startswith(config.prompts.apology_message)
-    assert "bạo lực" in result["answer"].lower()
-    services.llm.generate.assert_not_called()
-    services.inference.embed_query.assert_not_called()
+    # Guard nodes removed; embed is called and no-context message is returned
+    assert result["answer"] == config.prompts.no_context_message
+    services.inference.embed_query.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1031,7 +1026,7 @@ async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoding_fails(
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_unsafe_output_regenerates_once():
-    """Unsafe output triggers one regeneration guided by categories."""
+    """Slim graph: output guard removed, LLM called once, answer returned as-is."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -1047,35 +1042,27 @@ async def test_rag_pipeline_unsafe_output_regenerates_once():
     services = _make_services(
         retrieved_docs=retrieved,
         reranked=reranked,
-        llm_side_effect=[
-            "Unsafe generated text",
-            "Safe regenerated text [[cite:hybrid:1]]",
-        ],
-        output_guard_side_effect=[UNSAFE_VIOLENT_RESULT, SAFE_OUTPUT_RESULT],
+        llm_side_effect=["Generated text [[cite:hybrid:1]]"],
     )
     config = _make_config(fallback_min_chunks=1)
     graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["output_safe"] is True
     assert result["answer"] == _answer_with_footer(
-        "Safe regenerated text",
+        "Generated text",
         title="T",
         url="https://example.com/t",
         source="s",
         score=0.9,
     )
-    assert services.llm.generate.await_count == 2
+    assert services.llm.generate.await_count == 1
     assert len(result["citations"]) == 1
-    retry_prompt = services.llm.generate.await_args_list[1].kwargs["user_prompt"]
-    assert "Violent" in retry_prompt
-    assert "Unsafe generated text" in retry_prompt
 
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_denies_after_unsafe_retry():
-    """A second unsafe output returns an informative denial and no citations."""
+    """Slim graph: output guard removed, LLM answer returned directly with citations."""
     from orchestrator.pipeline.rag import build_rag_graph
 
     retrieved = [{
@@ -1091,15 +1078,19 @@ async def test_rag_pipeline_denies_after_unsafe_retry():
     services = _make_services(
         retrieved_docs=retrieved,
         reranked=reranked,
-        llm_side_effect=["Unsafe generated text", "Still unsafe text"],
-        output_guard_side_effect=[UNSAFE_VIOLENT_RESULT, UNSAFE_VIOLENT_RESULT],
+        llm_side_effect=["Generated text [[cite:hybrid:1]]"],
     )
     config = _make_config(fallback_min_chunks=1)
     graph = build_rag_graph(services, config)
 
     result = await graph.ainvoke(_initial_state())
 
-    assert result["output_safe"] is False
-    assert result["answer"].startswith(config.prompts.guard_error_message)
-    assert "bạo lực" in result["answer"].lower()
-    assert result["citations"] == []
+    assert result["answer"] == _answer_with_footer(
+        "Generated text",
+        title="T",
+        url="https://example.com/t",
+        source="s",
+        score=0.9,
+    )
+    assert services.llm.generate.await_count == 1
+    assert len(result["citations"]) == 1
