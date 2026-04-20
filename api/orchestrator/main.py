@@ -9,16 +9,10 @@ from loguru import logger
 from orchestrator.config import get_settings
 from orchestrator.tracing import setup_logging, setup_langsmith
 from orchestrator.pipeline.rag import build_rag_graph
-from orchestrator.routers.audio import create_audio_router
 from orchestrator.routers.chat import create_chat_router
-from orchestrator.services.asr import ASRClient
-from orchestrator.services.guard import GuardClient
-from orchestrator.services.embedder import EmbedderClient
+from orchestrator.services.inference import InferenceClient
 from orchestrator.services.retriever import RetrieverClient
-from orchestrator.services.reranker import RerankerClient
 from orchestrator.services.llm import LLMClient
-from orchestrator.services.sparse_encoder import SparseEncoderService
-from orchestrator.services.tts import TTSClient
 from orchestrator.services.web_search import WebSearchClient
 
 
@@ -27,7 +21,6 @@ def _looks_like_runtime_settings(settings) -> bool:
         hasattr(settings, field)
         for field in ("observability", "services", "llm")
     )
-
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -42,30 +35,13 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         logger.info("Initialising service clients and RAG graph…")
         services = SimpleNamespace(
-            guard=GuardClient(
-                settings.services.guard_url,
-                settings.services.guard_timeout,
+            inference=InferenceClient(
+                settings.services.inference_url,
+                settings.services.inference_timeout,
             ),
-            embedder=EmbedderClient(
-                settings.services.embedding_url,
-                settings.services.embedding_timeout,
-            ),
-            sparse_encoder=SparseEncoderService(),
             retriever=RetrieverClient(
                 settings.services.qdrant_url,
                 settings.services.qdrant_collection,
-            ),
-            reranker=RerankerClient(
-                settings.services.reranker_url,
-                settings.services.reranker_timeout,
-            ),
-            asr=ASRClient(
-                settings.services.asr_url,
-                settings.services.asr_timeout,
-            ),
-            tts=TTSClient(
-                settings.services.tts_url,
-                settings.services.tts_timeout,
             ),
             llm=LLMClient(
                 url=settings.llm.url,
@@ -89,11 +65,10 @@ def create_app() -> FastAPI:
             create_chat_router(
                 rag_graph,
                 services.llm,
-                services.guard,
+                None,
                 settings.prompts,
             )
         )
-        app.include_router(create_audio_router(services.asr, services.tts))
         logger.info("RAG graph ready")
         yield
 
