@@ -69,7 +69,7 @@ class PromptsConfig(BaseModel):
         "{messages}"
     )
     direct_system_prompt: str = (
-        "Viết lại hoặc trả lời trực tiếp bằng tiếng Việt tự nhiên, ưu tiên chia ra thành các phần nhỏ, có thể ngăn cách bằng `---`.\n"
+        "Viết lại hoặc trả lời trực tiếp bằng tiếng Việt tự nhiên, câu trả lời lý tưởng là khoảng 500-700 từ, nên chia ra thành các phần nhỏ.\n"
         "Không dùng citations. Không bịa dữ kiện cần tra cứu."
     )
     rag_system_prompt: str = (
