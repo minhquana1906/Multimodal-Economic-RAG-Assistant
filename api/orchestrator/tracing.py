@@ -3,6 +3,9 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 
 from loguru import logger
 
@@ -53,6 +56,24 @@ def setup_logging(config: ObservabilityConfig) -> None:
             pass  
 
     logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
+
+
+@asynccontextmanager
+async def log_phase(phase: str, **meta) -> AsyncIterator[dict]:
+    """Async context manager that logs phase name and elapsed_ms on exit.
+
+    Yields a mutable dict so callers can populate fields before the log fires:
+        async with log_phase("retrieval", top_k=10) as ctx:
+            docs = await search(...)
+            ctx["hits"] = len(docs)
+    """
+    t0 = time.monotonic()
+    ctx: dict = dict(meta)
+    yield ctx
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    parts = [f"phase={phase}", f"ms={elapsed_ms}"]
+    parts.extend(f"{k}={v}" for k, v in ctx.items())
+    logger.info(" ".join(parts))
 
 
 def setup_langsmith(config: ObservabilityConfig) -> None:
