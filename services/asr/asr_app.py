@@ -187,7 +187,7 @@ async def transcribe(
         waveform, sr = await asyncio.to_thread(_decode_audio, audio_bytes)
     except Exception as e:
         logger.error(f"Audio decode failed: {e}")
-        return JSONResponse({"detail": f"Failed to decode audio: {e}"}, status_code=400)
+        return JSONResponse({"detail": "Failed to decode audio payload"}, status_code=400)
 
     # Check duration
     duration_s = waveform.shape[-1] / sr
@@ -214,7 +214,7 @@ async def transcribe(
         )
     except Exception as e:
         logger.error(f"ASR inference failed: {e}")
-        return JSONResponse({"detail": f"Transcription failed: {e}"}, status_code=500)
+        return JSONResponse({"detail": "Transcription failed"}, status_code=500)
 
     text = results[0].text if results else ""
     latency_ms = int((time.monotonic() - t0) * 1000)

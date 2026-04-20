@@ -228,7 +228,7 @@ async def synthesize(req: SynthesizeRequest):
         except Exception as e:
             logger.error(f"TTS inference failed on sentence {i}: {e}")
             return JSONResponse(
-                {"detail": f"Synthesis failed on sentence {i}: {e}"},
+                {"detail": f"Synthesis failed on sentence {i}"},
                 status_code=500,
             )
 
@@ -297,7 +297,7 @@ async def stream(req: SynthesizeRequest):
                 yield f"data: {event_data}\n\n"
             except Exception as e:
                 logger.error(f"TTS stream failed on sentence {i}: {e}")
-                error_data = json.dumps({"error": str(e), "index": i})
+                error_data = json.dumps({"error": "Synthesis failed", "index": i})
                 yield f"data: {error_data}\n\n"
                 break
 
