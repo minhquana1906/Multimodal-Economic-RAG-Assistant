@@ -6,15 +6,11 @@ SERVICE ?=
 DOCKERHUB_NAMESPACE ?= minhquan1906
 IMAGE_TAG ?= latest
 
-IMAGE_EMBEDDING := $(DOCKERHUB_NAMESPACE)/eco-rag-embedding:$(IMAGE_TAG)
-IMAGE_RERANKER := $(DOCKERHUB_NAMESPACE)/eco-rag-reranker:$(IMAGE_TAG)
-IMAGE_GUARD := $(DOCKERHUB_NAMESPACE)/eco-rag-guard:$(IMAGE_TAG)
-IMAGE_ASR := $(DOCKERHUB_NAMESPACE)/eco-rag-asr:$(IMAGE_TAG)
-IMAGE_TTS := $(DOCKERHUB_NAMESPACE)/eco-rag-tts:$(IMAGE_TAG)
+IMAGE_INFERENCE := $(DOCKERHUB_NAMESPACE)/eco-rag-inference:$(IMAGE_TAG)
 IMAGE_ORCHESTRATOR := $(DOCKERHUB_NAMESPACE)/eco-rag-orchestrator:$(IMAGE_TAG)
 IMAGE_INGEST := $(DOCKERHUB_NAMESPACE)/eco-rag-ingest:$(IMAGE_TAG)
 
-.PHONY: test test-integration dev-cache dev-build dev-up dev-down dev-restart dev-logs dev-ps dev-audio-up dev-ingest vast-pull vast-up vast-down vast-logs vast-ps images-build images-push images-build-push
+.PHONY: test test-integration dev-cache dev-build dev-build-up dev-up dev-down dev-restart dev-logs dev-ps dev-ingest build build-up up down restart logs ps ingest images-build images-push images-build-push
 
 test:
 	uv run pytest
@@ -47,9 +43,6 @@ dev-logs:
 dev-ps:
 	$(DEV_COMPOSE) ps
 
-dev-audio-up: dev-cache
-	$(DEV_COMPOSE) --profile audio up -d
-
 dev-ingest: dev-cache
 	$(DEV_COMPOSE) --profile ingest up ingest
 
@@ -75,30 +68,19 @@ logs:
 ps:
 	$(COMPOSE) ps
 
-audio-up: cache
-	$(COMPOSE) --profile audio up -d
-
-ingest: cache
+ingest: 
 	$(COMPOSE) --profile ingest up ingest
 
 # Build and push images to Hub
 images-build:
 	test -n "$(DOCKERHUB_NAMESPACE)"
-	docker build -t $(IMAGE_EMBEDDING) services/embedding
-	docker build -t $(IMAGE_RERANKER) services/reranker
-	docker build -t $(IMAGE_GUARD) services/guard
-	docker build -t $(IMAGE_ASR) services/asr
-	docker build -t $(IMAGE_TTS) services/tts
-	docker build -t $(IMAGE_ORCHESTRATOR) api
-	docker build -t $(IMAGE_INGEST) scripts
+	docker build -t $(IMAGE_INFERENCE) -f infra/docker/app.gpu.Dockerfile .
+	docker build -t $(IMAGE_ORCHESTRATOR) -f infra/docker/app.cpu.Dockerfile .
+	docker build -t $(IMAGE_INGEST) -f infra/docker/app.cpu.Dockerfile .
 
 images-push:
 	test -n "$(DOCKERHUB_NAMESPACE)"
-	docker push $(IMAGE_EMBEDDING)
-	docker push $(IMAGE_RERANKER)
-	docker push $(IMAGE_GUARD)
-	docker push $(IMAGE_ASR)
-	docker push $(IMAGE_TTS)
+	docker push $(IMAGE_INFERENCE)
 	docker push $(IMAGE_ORCHESTRATOR)
 	docker push $(IMAGE_INGEST)
 

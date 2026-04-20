@@ -20,7 +20,6 @@ networks:
 volumes:
     qdrant_storage:
     open-webui:
-    ollama_data:
 
 services:
     qdrant:
@@ -41,23 +40,22 @@ services:
             retries: 5
             start_period: 10s
 
-    embedding:
+    inference:
         <<: *gpu-reservation
         build:
-            context: ./services/embedding
-        hostname: embedding
+            context: .
+            dockerfile: infra/docker/app.gpu.Dockerfile
+        hostname: inference
         ports:
             - '8001:8001'
         environment:
             HF_TOKEN: ${HF_TOKEN}
-            EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
             PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-            MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
-            ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
             <<: *hf-cache-env
         volumes:
             - *hf-cache-volume
-            - ./services/embedding:/app
+            - ./services/inference:/app
+        command: uvicorn inference_app:app --host 0.0.0.0 --port 8001 --reload
         networks:
             - rag-net
         healthcheck:
@@ -73,70 +71,44 @@ services:
             retries: 12
             start_period: 120s
 
-    reranker:
+    llm:
         <<: *gpu-reservation
-        build:
-            context: ./services/reranker
-        hostname: reranker
+        image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.18.0-x86_64-cu130}
+        hostname: llm
+        ipc: host
         ports:
-            - '8002:8002'
+            - '8004:8004'
         environment:
             HF_TOKEN: ${HF_TOKEN}
-            RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
-            PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-            <<: *hf-cache-env
+            VLLM_WORKER_MULTIPROC_METHOD: spawn
         volumes:
             - *hf-cache-volume
-            - ./services/reranker:/app
+        command:
+            - --host
+            - 0.0.0.0
+            - --port
+            - '8004'
+            - --model
+            - ${LLM__MODEL}
+            - --served-model-name
+            - ${LLM__MODEL}
+            - --gpu-memory-utilization
+            - ${VLLM_LLM_GPU_MEMORY_UTILIZATION:-0.90}
+            - --max-model-len
+            - ${VLLM_LLM_MAX_MODEL_LEN:-8192}
         networks:
             - rag-net
         healthcheck:
-            test:
-                [
-                    'CMD',
-                    'python',
-                    '-c',
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')",
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 12
-            start_period: 120s
-
-    guard:
-        <<: *gpu-reservation
-        build:
-            context: ./services/guard
-        hostname: guard
-        ports:
-            - '8003:8003'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            GUARD_MODEL: ${SERVICES__GUARD_MODEL}
-            GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
-            PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-            <<: *hf-cache-env
-        volumes:
-            - *hf-cache-volume
-            - ./services/guard:/app
-        networks:
-            - rag-net
-        healthcheck:
-            test:
-                [
-                    'CMD',
-                    'python',
-                    '-c',
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')",
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 12
-            start_period: 120s
+            test: ['CMD', 'curl', '-fsS', 'http://localhost:8004/health']
+            interval: 20s
+            timeout: 10s
+            retries: 5
+            start_period: 240s
 
     orchestrator:
         build:
-            context: ./api
+            context: .
+            dockerfile: infra/docker/app.cpu.Dockerfile
         hostname: orchestrator
         ports:
             - '8000:8000'
@@ -144,16 +116,15 @@ services:
             - .env
         volumes:
             - ./api:/app
+        command: uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000 --reload
         networks:
             - rag-net
         depends_on:
             qdrant:
                 condition: service_healthy
-            embedding:
+            inference:
                 condition: service_healthy
-            reranker:
-                condition: service_healthy
-            guard:
+            llm:
                 condition: service_healthy
         healthcheck:
             test:
@@ -169,7 +140,7 @@ services:
             start_period: 15s
 
     webui:
-        image: ghcr.io/open-webui/open-webui:v0.8.10
+        image: ghcr.io/open-webui/open-webui:${WEBUI_IMAGE_TAG:-v0.8.10}
         hostname: webui
         ports:
             - '8080:8080'
@@ -203,21 +174,12 @@ services:
             orchestrator:
                 condition: service_healthy
 
-    tunnel:
-        image: cloudflare/cloudflared:2026.3.0
-        hostname: tunnel
-        command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-        networks:
-            - rag-net
-        depends_on:
-            - webui
-        restart: unless-stopped
-
     ingest:
         build:
-            context: ./scripts
+            context: .
+            dockerfile: infra/docker/app.cpu.Dockerfile
         environment:
-            SERVICES__EMBEDDING_URL: ${SERVICES__EMBEDDING_URL}
+            SERVICES__INFERENCE_URL: ${SERVICES__INFERENCE_URL}
             SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
             SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
             INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
@@ -226,97 +188,13 @@ services:
         volumes:
             - *hf-cache-volume
             - ./scripts:/app
+        command: python ingest.py
         networks:
             - rag-net
         depends_on:
             qdrant:
                 condition: service_healthy
-            embedding:
+            inference:
                 condition: service_healthy
         profiles:
             - ingest
-
-    asr:
-        <<: *gpu-reservation
-        build:
-            context: ./services/asr
-        hostname: asr
-        ports:
-            - '8005:8005'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            ASR_MODEL: ${SERVICES__ASR_MODEL}
-            ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
-            ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
-            <<: *hf-cache-env
-        volumes:
-            - *hf-cache-volume
-            - ./services/asr:/app
-        networks:
-            - rag-net
-        healthcheck:
-            test:
-                [
-                    'CMD',
-                    'python',
-                    '-c',
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')",
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 6
-            start_period: 30s
-        profiles:
-            - audio
-
-    tts:
-        <<: *gpu-reservation
-        build:
-            context: ./services/tts
-        hostname: tts
-        ports:
-            - '8006:8006'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            TTS_MODEL: ${SERVICES__TTS_MODEL}
-            TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
-            TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
-            TTS_SPEED: ${SERVICES__TTS_SPEED}
-            <<: *hf-cache-env
-        volumes:
-            - *hf-cache-volume
-            - ./services/tts:/app
-        networks:
-            - rag-net
-        healthcheck:
-            test:
-                [
-                    'CMD',
-                    'python',
-                    '-c',
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')",
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 6
-            start_period: 30s
-        profiles:
-            - audio
-
-    ollama:
-        <<: *gpu-reservation
-        image: ollama/ollama:latest
-        hostname: ollama
-        ports:
-            - '11434:11434'
-        volumes:
-            - ollama_data:/root/.ollama
-        networks:
-            - rag-net
-        command: ['serve']
-        healthcheck:
-            test: ['CMD', 'ollama', 'list']
-            interval: 10s
-            timeout: 5s
-            retries: 5
-            start_period: 20s

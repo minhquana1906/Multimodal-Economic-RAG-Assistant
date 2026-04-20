@@ -49,10 +49,13 @@ services:
             retries: 5
             start_period: 10s
 
-    embedding:
+    inference:
         <<: *gpu-0
-        image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-embedding:${IMAGE_TAG:-latest}
-        hostname: embedding
+        build:
+            context: .
+            dockerfile: infra/docker/app.gpu.Dockerfile
+        image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-inference:${IMAGE_TAG:-latest}
+        hostname: inference
         pull_policy: always
         ports:
             - '8001:8001'
@@ -60,13 +63,11 @@ services:
             HF_TOKEN: ${HF_TOKEN}
             HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-120}
             HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
-            EMBEDDING_MODEL: ${SERVICES__EMBEDDING_MODEL}
             PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-            MAX_SEQ_LENGTH: ${SERVICES__EMBEDDING_MAX_SEQ_LENGTH}
-            ENCODE_BATCH_SIZE: ${SERVICES__EMBEDDING_ENCODE_BATCH_SIZE}
             <<: *hf-cache-env
         volumes:
             - hf_cache:/data/huggingface
+        command: uvicorn inference_app:app --host 0.0.0.0 --port 8001
         networks:
             - rag-net
         restart: unless-stopped
@@ -77,69 +78,6 @@ services:
                     'python3',
                     '-c',
                     "import urllib.request; urllib.request.urlopen('http://localhost:8001/health').read()",
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 5
-            start_period: 300s
-
-    reranker:
-        <<: *gpu-0
-        image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-reranker:${IMAGE_TAG:-latest}
-        hostname: reranker
-        pull_policy: always
-        ports:
-            - '8002:8002'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-120}
-            HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
-            RERANKER_MODEL: ${SERVICES__RERANKER_MODEL}
-            <<: *hf-cache-env
-        volumes:
-            - hf_cache:/data/huggingface
-        networks:
-            - rag-net
-        restart: unless-stopped
-        healthcheck:
-            test:
-                [
-                    'CMD',
-                    'python3',
-                    '-c',
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8002/health').read()",
-                ]
-            interval: 10s
-            timeout: 5s
-            retries: 5
-            start_period: 300s
-
-    guard:
-        <<: *gpu-0
-        image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-guard:${IMAGE_TAG:-latest}
-        hostname: guard
-        pull_policy: always
-        ports:
-            - '8003:8003'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-120}
-            HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
-            GUARD_MODEL: ${SERVICES__GUARD_MODEL}
-            GUARD_MAX_NEW_TOKENS: ${SERVICES__GUARD_MAX_NEW_TOKENS}
-            <<: *hf-cache-env
-        volumes:
-            - hf_cache:/data/huggingface
-        networks:
-            - rag-net
-        restart: unless-stopped
-        healthcheck:
-            test:
-                [
-                    'CMD',
-                    'python3',
-                    '-c',
-                    "import urllib.request; urllib.request.urlopen('http://localhost:8003/health').read()",
                 ]
             interval: 10s
             timeout: 5s
@@ -181,50 +119,10 @@ services:
             retries: 5
             start_period: 240s
 
-    # vlm:
-    #     <<: *gpu-1
-    #     image: vllm/vllm-openai:v0.18.0-x86_64-cu130
-    #     hostname: vlm
-    #     pull_policy: always
-    #     ipc: host
-    #     ports:
-    #         - '8007:8007'
-    #     environment:
-    #         HF_TOKEN: ${HF_TOKEN}
-    #         VLLM_WORKER_MULTIPROC_METHOD: spawn
-    #     volumes:
-    #         - hf_cache:/root/.cache/huggingface
-    #     command:
-    #         - --host
-    #         - 0.0.0.0
-    #         - --port
-    #         - '8007'
-    #         - --model
-    #         - ${VLM_MODEL}
-    #         - --served-model-name
-    #         - ${VLM_MODEL}
-    #         - --gpu-memory-utilization
-    #         - ${VLLM_VLM_GPU_MEMORY_UTILIZATION}
-    #         - --max-model-len
-    #         - ${VLLM_VLM_MAX_MODEL_LEN}
-    #         - --limit-mm-per-prompt
-    #         - image=1
-    #     networks:
-    #         - rag-net
-    #     healthcheck:
-    #         test:
-    #             [
-    #                 'CMD',
-    #                 'python',
-    #                 '-c',
-    #                 "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')",
-    #             ]
-    #         interval: 20s
-    #         timeout: 10s
-    #         retries: 20
-    #         start_period: 240s
-
     orchestrator:
+        build:
+            context: .
+            dockerfile: infra/docker/app.cpu.Dockerfile
         image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-orchestrator:${IMAGE_TAG:-latest}
         hostname: orchestrator
         pull_policy: always
@@ -235,16 +133,13 @@ services:
         environment:
             LLM__URL: ${LLM__URL}
             LLM__MODEL: ${LLM__MODEL}
+        command: uvicorn orchestrator.main:app --host 0.0.0.0 --port 8000
         networks:
             - rag-net
         depends_on:
             qdrant:
                 condition: service_healthy
-            embedding:
-                condition: service_healthy
-            reranker:
-                condition: service_healthy
-            guard:
+            inference:
                 condition: service_healthy
             llm:
                 condition: service_healthy
@@ -309,10 +204,13 @@ services:
         restart: unless-stopped
 
     ingest:
+        build:
+            context: .
+            dockerfile: infra/docker/app.cpu.Dockerfile
         image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-ingest:${IMAGE_TAG:-latest}
         pull_policy: always
         environment:
-            SERVICES__EMBEDDING_URL: ${SERVICES__EMBEDDING_URL}
+            SERVICES__INFERENCE_URL: ${SERVICES__INFERENCE_URL}
             SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
             SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
             INGEST__BATCH_SIZE: ${INGEST__BATCH_SIZE}
@@ -320,67 +218,13 @@ services:
             <<: *hf-cache-env
         volumes:
             - hf_cache:/data/huggingface
+        command: python ingest.py
         networks:
             - rag-net
         depends_on:
             qdrant:
                 condition: service_healthy
-            embedding:
+            inference:
                 condition: service_healthy
         profiles:
             - ingest
-
-    asr:
-        <<: *gpu-0
-        image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-asr:${IMAGE_TAG:-latest}
-        build:
-            context: ./services/asr
-        hostname: asr
-        pull_policy: always
-        ports:
-            - '8005:8005'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            ASR_MODEL: ${SERVICES__ASR_MODEL}
-            ASR_MAX_DURATION_S: ${SERVICES__ASR_MAX_DURATION_S}
-            ASR_IDLE_TIMEOUT: ${SERVICES__ASR_IDLE_TIMEOUT}
-            <<: *hf-cache-env
-        volumes:
-            - hf_cache:/data/huggingface
-        networks:
-            - rag-net
-        healthcheck:
-            test: ['CMD', 'curl', '-fsS', 'http://localhost:8005/health']
-            interval: 10s
-            timeout: 5s
-            retries: 5
-            start_period: 10s
-        profiles:
-            - audio
-
-    tts:
-        <<: *gpu-0
-        image: ${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/eco-rag-tts:${IMAGE_TAG:-latest}
-        hostname: tts
-        pull_policy: always
-        ports:
-            - '8006:8006'
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            TTS_MODEL: ${SERVICES__TTS_MODEL}
-            TTS_IDLE_TIMEOUT: ${SERVICES__TTS_IDLE_TIMEOUT}
-            TTS_SAMPLE_RATE: ${SERVICES__TTS_SAMPLE_RATE}
-            TTS_SPEED: ${SERVICES__TTS_SPEED}
-            <<: *hf-cache-env
-        volumes:
-            - hf_cache:/data/huggingface
-        networks:
-            - rag-net
-        healthcheck:
-            test: ['CMD', 'curl', '-fsS', 'http://localhost:8006/health']
-            interval: 10s
-            timeout: 5s
-            retries: 5
-            start_period: 10s
-        profiles:
-            - audio
