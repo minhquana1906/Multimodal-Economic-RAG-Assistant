@@ -2,24 +2,13 @@ x-hf-cache-env: &hf-cache-env
     HF_HOME: /data/huggingface
     HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
 
-# gpu-0 → inference (embedding model)
-x-gpu-0: &gpu-0
+x-gpu-reservation: &gpu-reservation
     deploy:
         resources:
             reservations:
                 devices:
                     - driver: nvidia
-                      device_ids: [ "0" ]
-                      capabilities: [ gpu ]
-
-# gpu-1 → llm (generation model)
-x-gpu-1: &gpu-1
-    deploy:
-        resources:
-            reservations:
-                devices:
-                    - driver: nvidia
-                      device_ids: [ "1" ]
+                      count: 1
                       capabilities: [ gpu ]
 
 networks:
@@ -52,7 +41,7 @@ services:
             start_period: 10s
 
     inference:
-        <<: *gpu-0
+        <<: *gpu-reservation
         image: ${DOCKERHUB_NAMESPACE:?set
             DOCKERHUB_NAMESPACE}/eco-rag-inference:${IMAGE_TAG:-latest}
         hostname: inference
@@ -67,7 +56,7 @@ services:
             <<: *hf-cache-env
         volumes:
             - hf_cache:/data/huggingface
-        command: uvicorn inference_app:app --host 0.0.0.0 --port 8001
+        command: uvicorn services.inference.inference_app:app --host 0.0.0.0 --port 8001
         networks:
             - rag-net
         restart: unless-stopped
@@ -86,52 +75,6 @@ services:
             retries: 5
             start_period: 300s
 
-    llm:
-        <<: *gpu-1
-        image: vllm/vllm-openai:v0.18.0-x86_64-cu130
-        hostname: llm
-        pull_policy: always
-        ipc: host
-        ports:
-            - "8004:8004"
-        environment:
-            HF_TOKEN: ${HF_TOKEN}
-            VLLM_WORKER_MULTIPROC_METHOD: spawn
-        volumes:
-            - hf_cache:/root/.cache/huggingface
-        command:
-            - --host
-            - "0.0.0.0"
-            - --port
-            - "8004"
-            - --model
-            - ${LLM__MODEL}
-            - --served-model-name
-            - ${LLM__MODEL}
-            - --gpu-memory-utilization
-            - ${VLLM__GPU_MEMORY_UTILIZATION:-0.75}
-            - --dtype
-            - ${VLLM__DTYPE:-bfloat16}
-            - --max-model-len
-            - ${VLLM__MAX_MODEL_LEN:-4096}
-            - --max-num-batched-tokens
-            - ${VLLM__MAX_NUM_BATCHED_TOKENS:-2048}
-            - --max-num-seqs
-            - ${VLLM__MAX_NUM_SEQS:-2}
-            - --kv-cache-dtype
-            - ${VLLM__KV_CACHE_DTYPE:-auto}
-            - --enable-prefix-caching
-            - --quantization
-            - ${VLLM__QUANTIZATION:-compressed-tensors}
-        networks:
-            - rag-net
-        healthcheck:
-            test: [ "CMD", "curl", "-fsS", "http://localhost:8004/health" ]
-            interval: 20s
-            timeout: 10s
-            retries: 5
-            start_period: 240s
-
     orchestrator:
         image: ${DOCKERHUB_NAMESPACE:?set
             DOCKERHUB_NAMESPACE}/eco-rag-orchestrator:${IMAGE_TAG:-latest}
@@ -149,8 +92,6 @@ services:
             qdrant:
                 condition: service_healthy
             inference:
-                condition: service_healthy
-            llm:
                 condition: service_healthy
         healthcheck:
             test:
@@ -206,19 +147,3 @@ services:
         restart: unless-stopped
         depends_on:
             - webui
-
-    bootstrap:
-        image: ${DOCKERHUB_NAMESPACE:?set
-            DOCKERHUB_NAMESPACE}/eco-rag-orchestrator:${IMAGE_TAG:-latest}
-        pull_policy: always
-        environment:
-            SERVICES__QDRANT_URL: ${SERVICES__QDRANT_URL}
-            SERVICES__QDRANT_COLLECTION: ${SERVICES__QDRANT_COLLECTION}
-        command: python scripts/qdrant_bootstrap.py
-        networks:
-            - rag-net
-        depends_on:
-            qdrant:
-                condition: service_healthy
-        profiles:
-            - tools

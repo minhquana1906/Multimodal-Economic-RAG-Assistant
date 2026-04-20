@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -19,9 +20,21 @@ from orchestrator.models.schemas import (
     ChatStreamChunk,
 )
 from orchestrator.pipeline.rag import RAGState
-from orchestrator.pipeline.rag_context import build_citation_section
-from orchestrator.pipeline.rag_prompts import build_generation_prompt, resolve_rag_system_prompt
+from orchestrator.pipeline.rag_context import (
+    build_citation_section,
+    build_context_item,
+    finalize_citations,
+)
+from orchestrator.pipeline.rag_policy import should_use_web_search_for_direct
+from orchestrator.pipeline.rag_prompts import (
+    build_direct_prompt,
+    build_direct_prompt_with_web,
+    build_generation_prompt,
+    build_intent_prompt,
+    resolve_rag_system_prompt,
+)
 from orchestrator.services.conversation import extract_latest_user_query, normalize_messages
+from orchestrator.tracing import log_phase
 
 
 def _build_initial_state(
@@ -54,6 +67,8 @@ async def execute_chat_turn(
     messages,
     max_tokens: int | None,
     prompts: PromptsConfig | None = None,
+    web_search: Any | None = None,
+    settings: Any | None = None,
 ) -> dict:
     """Route request via detect_intent: direct skips the graph, rag invokes it."""
     prompts = prompts or PromptsConfig()
@@ -63,20 +78,80 @@ async def execute_chat_turn(
     if not raw_query:
         return {"answer": "", "citations": [], "task_type": "rag", "resolved_query": ""}
 
-    # Serialize messages for detect_intent
-    serialized = [{"role": m.role, "content": m.text_content()} for m in normalized]
-
     intent = {"route": "rag", "resolved_query": raw_query}
     if llm is not None and hasattr(llm, "detect_intent"):
-        intent = await llm.detect_intent(serialized)
+        intent_system_prompt, intent_user_prompt = build_intent_prompt(normalized, prompts)
+        intent = await llm.detect_intent(
+            system_prompt=intent_system_prompt,
+            user_prompt=intent_user_prompt,
+            fallback_query=raw_query,
+        )
 
     route = intent.get("route", "rag")
     resolved_query = intent.get("resolved_query") or raw_query
+    logger.info(f"route_decided route={route} resolved_query_len={len(resolved_query)}")
 
     if route == "direct" and llm is not None:
+        use_web, web_reason = (False, "disabled")
+        if web_search is not None and settings is not None:
+            use_web, web_reason = should_use_web_search_for_direct(resolved_query, settings)
+
+        if use_web:
+            logger.info(f"direct_web_search=true reason={web_reason}")
+            async with log_phase("direct_web") as ctx:
+                web_results = await web_search.search(resolved_query)
+                ctx["hits"] = len(web_results)
+
+            if web_results:
+                web_context = [
+                    build_context_item(
+                        item,
+                        source_type="web",
+                        retrieval_stage="web_fallback",
+                        original_rank=i,
+                        context_id=item.get("context_id", f"web:{i}"),
+                    )
+                    for i, item in enumerate(web_results)
+                ]
+                user_prompt = build_direct_prompt_with_web(
+                    messages=normalized,
+                    resolved_query=resolved_query,
+                    web_results=web_results,
+                    prompts=prompts,
+                )
+                system_prompt = resolve_rag_system_prompt(prompts)
+                answer = await llm.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+                context_limit = getattr(getattr(settings, "rag", None), "context_limit", 10)
+                pseudo_state = {
+                    "answer": answer,
+                    "final_context": web_context,
+                    "citation_pool": {item["context_id"]: item for item in web_context},
+                    "response_mode": "text",
+                }
+                result = finalize_citations(
+                    pseudo_state,
+                    context_limit=context_limit,
+                    citation_limit=context_limit,
+                )
+                return {
+                    "answer": result["answer"],
+                    "citations": result["citations"],
+                    "task_type": "direct_web",
+                    "resolved_query": resolved_query,
+                }
+
+        logger.info(f"direct_web_search=false reason={web_reason}")
+        direct_user_prompt = build_direct_prompt(
+            messages=normalized,
+            resolved_query=resolved_query,
+            prompts=prompts,
+        )
         answer = await llm.generate(
             system_prompt=prompts.direct_system_prompt,
-            user_prompt=resolved_query,
+            user_prompt=direct_user_prompt,
         )
         return {
             "answer": answer,
@@ -86,12 +161,11 @@ async def execute_chat_turn(
         }
 
     # rag route
-    result = await rag_graph.ainvoke(
-        _build_initial_state(
-            raw_query=raw_query,
-            resolved_query=resolved_query,
+    async with log_phase("rag_graph") as ctx:
+        result = await rag_graph.ainvoke(
+            _build_initial_state(raw_query=raw_query, resolved_query=resolved_query)
         )
-    )
+        ctx["citations"] = len(result.get("citations", []))
     return {
         "answer": result.get("answer", ""),
         "citations": result.get("citations", []),
@@ -106,6 +180,7 @@ def create_chat_router(
     task_llm=None,
     prompts: PromptsConfig | None = None,
     settings=None,
+    web_search=None,
 ) -> APIRouter:
     """Return a fresh APIRouter with /v1/chat/completions bound to the given RAG graph."""
     router = APIRouter()
@@ -118,11 +193,14 @@ def create_chat_router(
             raise HTTPException(status_code=400, detail="No user message found")
 
         request_id = str(uuid.uuid4())[:8]
+        t_start = time.monotonic()
         with logger.contextualize(request_id=request_id):
-            logger.info("chat request received")
+            logger.info(
+                f"request_received stream={request.stream} model={request.model} query_len={len(user_message)}"
+            )
 
             if request.stream and retrieval_graph is not None:
-                return await _stream_response(request)
+                return _stream_response(request, t_start)
 
             # Non-streaming path
             result = await execute_chat_turn(
@@ -131,77 +209,163 @@ def create_chat_router(
                 request.messages,
                 request.max_tokens,
                 prompts=prompts,
+                web_search=web_search,
+                settings=settings,
             )
             answer: str = result.get("answer", "")
+            total_ms = int((time.monotonic() - t_start) * 1000)
+            logger.info(
+                f"request_completed route={result.get('task_type', 'rag')} total_ms={total_ms}"
+            )
             return ChatResponse(
                 model=request.model,
                 choices=[ChatCompletionChoice(message=AssistantMessage(content=answer))],
             )
 
-    async def _stream_response(request: ChatRequest):
+    def _stream_response(request: ChatRequest, t_start: float):
         normalized = normalize_messages(request.messages)
         raw_query = extract_latest_user_query(normalized)
-        serialized = [{"role": m.role, "content": m.text_content()} for m in normalized]
-
-        # Detect intent (direct chat vs RAG)
-        intent = {"route": "rag", "resolved_query": raw_query}
-        if task_llm is not None and hasattr(task_llm, "detect_intent"):
-            intent = await task_llm.detect_intent(serialized)
-
-        route = intent.get("route", "rag")
-        resolved_query = intent.get("resolved_query") or raw_query
-
-        if route == "direct":
-            stream_messages = [
-                {"role": "system", "content": prompts.direct_system_prompt},
-                {"role": "user", "content": resolved_query},
-            ]
-            citation_suffix = ""
-        else:
-            # Run retrieval only — no LLM call, so first token starts after ~2-3s
-            retrieval_state = await retrieval_graph.ainvoke(
-                _build_initial_state(raw_query=raw_query, resolved_query=resolved_query)
-            )
-            final_context = retrieval_state.get("final_context", [])
-
-            if settings is not None:
-                user_prompt = build_generation_prompt(retrieval_state, settings)
-                citation_suffix = (
-                    build_citation_section(final_context, settings.rag.context_limit)
-                    if final_context
-                    else ""
-                )
-            else:
-                user_prompt = resolved_query
-                citation_suffix = ""
-
-            system_prompt = resolve_rag_system_prompt(prompts)
-            stream_messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
+        route = "rag"
 
         async def generate():
-            if task_llm is not None and hasattr(task_llm, "stream_chat"):
-                is_first = True
-                async for delta in task_llm.stream_chat(stream_messages):
-                    role = "assistant" if is_first else None
-                    is_first = False
-                    chunk = ChatStreamChunk(
-                        model=request.model,
-                        choices=[ChatStreamChoice(delta=ChatDelta(role=role, content=delta))],
-                    )
-                    yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+            nonlocal route
 
-                if citation_suffix:
-                    cite_chunk = ChatStreamChunk(
-                        model=request.model,
-                        choices=[ChatStreamChoice(delta=ChatDelta(content=citation_suffix))],
+            # Wrap the entire streaming flow (detection + retrieval + generation)
+            # under one LangSmith parent span so all child runs appear nested.
+            try:
+                from langsmith import trace as _ls_trace
+                ls_ctx = _ls_trace(
+                    "Stream Chat Turn",
+                    run_type="chain",
+                    inputs={"query": raw_query, "model": request.model},
+                )
+            except Exception:
+                import contextlib
+                ls_ctx = contextlib.nullcontext()
+
+            stream_messages: list[dict] = []
+            citation_suffix = ""
+
+            async with ls_ctx:
+                # Detect intent
+                intent = {"route": "rag", "resolved_query": raw_query}
+                if task_llm is not None and hasattr(task_llm, "detect_intent"):
+                    intent_s, intent_u = build_intent_prompt(normalized, prompts)
+                    intent = await task_llm.detect_intent(
+                        system_prompt=intent_s,
+                        user_prompt=intent_u,
+                        fallback_query=raw_query,
                     )
-                    yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
-            else:
-                # No streaming support — send empty stop chunk
-                pass
+
+                route = intent.get("route", "rag")
+                resolved_query = intent.get("resolved_query") or raw_query
+                logger.info(f"route_decided route={route} resolved_query_len={len(resolved_query)}")
+
+                if route == "direct":
+                    use_web, web_reason = (False, "disabled")
+                    if web_search is not None and settings is not None:
+                        use_web, web_reason = should_use_web_search_for_direct(
+                            resolved_query, settings
+                        )
+
+                    if use_web:
+                        logger.info(f"direct_web_search=true reason={web_reason}")
+                        async with log_phase("direct_web") as ctx:
+                            web_results = await web_search.search(resolved_query)
+                            ctx["hits"] = len(web_results)
+
+                        if web_results:
+                            web_context = [
+                                build_context_item(
+                                    item,
+                                    source_type="web",
+                                    retrieval_stage="web_fallback",
+                                    original_rank=i,
+                                    context_id=item.get("context_id", f"web:{i}"),
+                                )
+                                for i, item in enumerate(web_results)
+                            ]
+                            user_prompt = build_direct_prompt_with_web(
+                                messages=normalized,
+                                resolved_query=resolved_query,
+                                web_results=web_results,
+                                prompts=prompts,
+                            )
+                            context_limit = getattr(
+                                getattr(settings, "rag", None), "context_limit", 10
+                            )
+                            citation_suffix = build_citation_section(web_context, context_limit)
+                            stream_messages = [
+                                {"role": "system", "content": resolve_rag_system_prompt(prompts)},
+                                {"role": "user", "content": user_prompt},
+                            ]
+                            route = "direct_web"
+                        else:
+                            use_web = False
+
+                    if not use_web:
+                        logger.info(f"direct_web_search=false reason={web_reason}")
+                        direct_user_prompt = build_direct_prompt(
+                            messages=normalized,
+                            resolved_query=resolved_query,
+                            prompts=prompts,
+                        )
+                        stream_messages = [
+                            {"role": "system", "content": prompts.direct_system_prompt},
+                            {"role": "user", "content": direct_user_prompt},
+                        ]
+
+                else:
+                    # RAG: run retrieval graph, then stream generation outside graph
+                    async with log_phase("retrieval_graph") as ctx:
+                        retrieval_state = await retrieval_graph.ainvoke(
+                            _build_initial_state(
+                                raw_query=raw_query, resolved_query=resolved_query
+                            )
+                        )
+                        ctx["web_results"] = len(retrieval_state.get("web_results", []))
+                        ctx["context_items"] = len(retrieval_state.get("final_context", []))
+
+                    final_context = retrieval_state.get("final_context", [])
+                    if settings is not None:
+                        user_prompt = build_generation_prompt(retrieval_state, settings)
+                        context_limit = settings.rag.context_limit
+                        citation_suffix = (
+                            build_citation_section(final_context, context_limit)
+                            if final_context
+                            else ""
+                        )
+                    else:
+                        user_prompt = resolved_query
+                        citation_suffix = ""
+
+                    system_prompt = resolve_rag_system_prompt(prompts)
+                    stream_messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ]
+
+                # Stream LLM response — stream_chat is @traceable, becomes child span
+                if task_llm is not None and hasattr(task_llm, "stream_chat"):
+                    is_first = True
+                    async for delta in task_llm.stream_chat(stream_messages):
+                        role = "assistant" if is_first else None
+                        is_first = False
+                        chunk = ChatStreamChunk(
+                            model=request.model,
+                            choices=[ChatStreamChoice(delta=ChatDelta(role=role, content=delta))],
+                        )
+                        yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+
+                    if citation_suffix:
+                        cite_chunk = ChatStreamChunk(
+                            model=request.model,
+                            choices=[ChatStreamChoice(delta=ChatDelta(content=citation_suffix))],
+                        )
+                        yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
+
+            total_ms = int((time.monotonic() - t_start) * 1000)
+            logger.info(f"request_completed route={route} total_ms={total_ms} stream=true")
 
             stop_chunk = ChatStreamChunk(
                 model=request.model,

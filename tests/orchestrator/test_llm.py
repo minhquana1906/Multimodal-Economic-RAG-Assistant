@@ -68,3 +68,39 @@ async def test_llm_warm_start_uses_minimal_completion(monkeypatch):
 
     assert captured["messages"] == [{"role": "user", "content": "ping"}]
     assert captured["max_tokens"] == 1
+
+
+@pytest.mark.asyncio
+async def test_detect_intent_uses_supplied_prompt_strings(monkeypatch):
+    from orchestrator.services.llm import LLMClient
+
+    llm = LLMClient(
+        url="http://llm:8004/v1",
+        model="test-model",
+        temperature=0.7,
+        max_tokens=512,
+        timeout=30.0,
+        api_key="",
+    )
+
+    captured: dict[str, object] = {}
+
+    async def fake_create_completion(messages, *, max_tokens=None):
+        captured["messages"] = messages
+        captured["max_tokens"] = max_tokens
+        return '{"route":"direct","resolved_query":"Tom tat cau hoi"}', 5, 10
+
+    monkeypatch.setattr(llm, "_create_completion", fake_create_completion)
+
+    result = await llm.detect_intent(
+        system_prompt="SYSTEM PROMPT",
+        user_prompt="USER PROMPT",
+        fallback_query="fallback query",
+    )
+
+    assert result == {"route": "direct", "resolved_query": "Tom tat cau hoi"}
+    assert captured["messages"] == [
+        {"role": "system", "content": "SYSTEM PROMPT"},
+        {"role": "user", "content": "USER PROMPT"},
+    ]
+    assert captured["max_tokens"] == 128

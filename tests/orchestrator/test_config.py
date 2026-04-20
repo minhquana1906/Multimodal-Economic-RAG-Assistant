@@ -128,6 +128,9 @@ def test_prompts_config_defaults():
     assert "route" in cfg.intent_system_prompt.lower()
     assert "{messages}" in cfg.intent_user_template
     assert "Viết lại" in cfg.direct_system_prompt
+    assert "header `##`" in cfg.direct_response_contract
+    assert "{conversation}" in cfg.direct_user_template
+    assert "{question}" in cfg.direct_user_template
     assert "kinh tế" in cfg.rag_system_prompt
     assert "{context}" in cfg.rag_user_template
     assert "{question}" in cfg.rag_user_template

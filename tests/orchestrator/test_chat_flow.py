@@ -109,7 +109,7 @@ async def test_rag_route_calls_rag_graph():
 
 @pytest.mark.asyncio
 async def test_detect_intent_receives_messages():
-    """detect_intent is called with the request messages."""
+    """detect_intent is called with built prompt strings from config."""
     app, mock_graph, mock_llm = _make_app_with_intent(
         intent_result={"route": "rag", "resolved_query": "GDP?"},
         rag_result={"answer": "ok", "citations": []},
@@ -126,17 +126,14 @@ async def test_detect_intent_receives_messages():
 
     call_args = mock_llm.detect_intent.await_args
     assert call_args is not None
-    passed_messages = call_args.args[0] if call_args.args else call_args.kwargs.get("messages")
-    assert passed_messages is not None
-    assert any(
-        m.get("content", "") == "Tốc độ tăng trưởng GDP?"
-        for m in passed_messages
-    )
+    assert call_args.kwargs["fallback_query"] == "Tốc độ tăng trưởng GDP?"
+    assert "route" in call_args.kwargs["system_prompt"].lower()
+    assert "USER: Tốc độ tăng trưởng GDP?" in call_args.kwargs["user_prompt"]
 
 
 @pytest.mark.asyncio
 async def test_direct_route_uses_resolved_query():
-    """The resolved_query from detect_intent is used for the direct LLM call."""
+    """The direct LLM call uses a built prompt, not only the raw resolved_query."""
     resolved = "Bạn có thể giải thích khái niệm lạm phát không?"
     app, mock_graph, mock_llm = _make_app_with_intent(
         intent_result={"route": "direct", "resolved_query": resolved},
@@ -155,9 +152,8 @@ async def test_direct_route_uses_resolved_query():
 
     assert response.status_code == 200
     mock_llm.generate.assert_awaited_once()
-    call_kwargs = mock_llm.generate.await_args
-    # resolved_query must appear in either system or user prompt
-    all_text = " ".join(str(a) for a in call_kwargs.args) + " ".join(
-        str(v) for v in call_kwargs.kwargs.values()
-    )
-    assert resolved in all_text
+    call_kwargs = mock_llm.generate.await_args.kwargs
+    assert call_kwargs["system_prompt"] == PromptsConfig().direct_system_prompt
+    assert resolved in call_kwargs["user_prompt"]
+    assert "##" in call_kwargs["user_prompt"]
+    assert "USER: giải thích lạm phát" in call_kwargs["user_prompt"]

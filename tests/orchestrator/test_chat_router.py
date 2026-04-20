@@ -44,12 +44,12 @@ def _make_app(
     # detect_intent uses the new routing flow
     last_user_content = rag_result.get("_test_resolved_query", "")
 
-    async def _detect_intent(messages):
-        last = next(
-            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
-            last_user_content,
-        )
-        return {"route": detect_intent_route, "resolved_query": last}
+    async def _detect_intent(*, system_prompt, user_prompt, fallback_query):
+        del system_prompt, user_prompt
+        return {
+            "route": detect_intent_route,
+            "resolved_query": fallback_query or last_user_content,
+        }
 
     mock_task_llm.detect_intent = AsyncMock(side_effect=_detect_intent)
 
