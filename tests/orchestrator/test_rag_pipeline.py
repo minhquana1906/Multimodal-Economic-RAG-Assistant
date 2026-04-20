@@ -12,6 +12,18 @@ UNSAFE_VIOLENT_RESULT = {
 }
 
 
+def _reranked_to_scores(reranked: list[dict] | None, n_docs: int) -> list[float]:
+    """Convert old reranker format [{index, score}] to a flat scores list for inference.rerank."""
+    if not reranked:
+        return []
+    scores = [0.0] * n_docs
+    for item in reranked:
+        idx = item.get("index", 0)
+        if 0 <= idx < n_docs:
+            scores[idx] = item.get("score", 0.0)
+    return scores
+
+
 def _make_services(
     input_guard_result=None,
     embed_vector=None,
@@ -34,23 +46,22 @@ def _make_services(
     else:
         services.guard.check_output = AsyncMock(return_value=output_guard_result or SAFE_OUTPUT_RESULT)
     if embed_raises:
-        services.embedder.embed_query = AsyncMock(side_effect=Exception("embed down"))
+        services.inference.embed_query = AsyncMock(side_effect=Exception("embed down"))
     else:
-        services.embedder.embed_query = AsyncMock(return_value=embed_vector or [0.1] * 1024)
-    if sparse_encode_raises:
-        services.sparse_encoder.encode_query = MagicMock(
+        services.inference.embed_query = AsyncMock(return_value=embed_vector or [0.1] * 1024)
+    if sparse_encode_raises or sparse_raises:
+        services.inference.sparse_query = AsyncMock(
             side_effect=RuntimeError("sparse down")
         )
     else:
-        services.sparse_encoder.encode_query = MagicMock(
+        services.inference.sparse_query = AsyncMock(
             return_value=sparse_vector or {"indices": [1, 2], "values": [0.3, 0.7]}
         )
-    if sparse_raises:
-        services.sparse_encoder.encode_query = MagicMock(
-            side_effect=RuntimeError("sparse down")
-        )
+    n_docs = len(retrieved_docs) if retrieved_docs else 0
+    services.inference.rerank = AsyncMock(
+        return_value=_reranked_to_scores(reranked, n_docs)
+    )
     services.retriever.hybrid_search = AsyncMock(return_value=retrieved_docs or [])
-    services.reranker.rerank = AsyncMock(return_value=reranked or [])
     services.web_search.search = AsyncMock(return_value=web_results or [])
     services.llm.generate = AsyncMock(side_effect=llm_side_effect or ["Test answer"])
     return services
@@ -178,7 +189,7 @@ async def test_rag_pipeline_passes_sparse_vector_into_hybrid_search():
         source="src.com",
         score=0.9,
     )
-    services.sparse_encoder.encode_query.assert_called_once_with("GDP Việt Nam?")
+    services.inference.sparse_query.assert_awaited_once_with("GDP Việt Nam?")
     assert (
         services.retriever.hybrid_search.await_args.kwargs["sparse_vector"]
         == sparse_vector
@@ -217,7 +228,7 @@ async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoder_errors(
         source="src.com",
         score=0.9,
     )
-    services.sparse_encoder.encode_query.assert_called_once_with("GDP Việt Nam?")
+    services.inference.sparse_query.assert_awaited_once_with("GDP Việt Nam?")
     assert services.retriever.hybrid_search.await_args.kwargs["sparse_vector"] is None
 
 
@@ -263,9 +274,9 @@ async def test_rag_pipeline_uses_resolved_query_for_retrieval_and_guards():
         score=0.9,
     )
     services.guard.check_input.assert_awaited_once_with(resolved_query)
-    services.embedder.embed_query.assert_awaited_once_with(resolved_query)
-    services.reranker.rerank.assert_awaited_once()
-    assert services.reranker.rerank.await_args.kwargs["query"] == resolved_query
+    services.inference.embed_query.assert_awaited_once_with(resolved_query)
+    services.inference.rerank.assert_awaited_once()
+    assert services.inference.rerank.await_args.kwargs["query"] == resolved_query
     services.guard.check_output.assert_awaited_once_with(
         text="GDP tăng 7% [[cite:hybrid:1]]",
         prompt=resolved_query,
@@ -740,7 +751,7 @@ async def test_rag_pipeline_unsafe_input_uses_category_reason():
     assert result["answer"].startswith(config.prompts.apology_message)
     assert "bạo lực" in result["answer"].lower()
     services.llm.generate.assert_not_called()
-    services.embedder.embed_query.assert_not_called()
+    services.inference.embed_query.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -986,7 +997,7 @@ async def test_rag_pipeline_passes_sparse_vector_to_hybrid_search():
 
     await graph.ainvoke(_initial_state(query="lạm phát là gì?"))
 
-    services.sparse_encoder.encode_query.assert_called_once_with("lạm phát là gì?")
+    services.inference.sparse_query.assert_awaited_once_with("lạm phát là gì?")
     services.retriever.hybrid_search.assert_awaited_once_with(
         dense_vector=[0.1] * 1024,
         sparse_vector={"indices": [3, 9], "values": [0.2, 0.8]},
@@ -1010,7 +1021,7 @@ async def test_rag_pipeline_falls_back_to_dense_only_when_sparse_encoding_fails(
 
     await graph.ainvoke(_initial_state(query="CPI hôm nay"))
 
-    services.sparse_encoder.encode_query.assert_called_once_with("CPI hôm nay")
+    services.inference.sparse_query.assert_awaited_once_with("CPI hôm nay")
     services.retriever.hybrid_search.assert_awaited_once_with(
         dense_vector=[0.1] * 1024,
         sparse_vector=None,

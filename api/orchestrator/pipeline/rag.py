@@ -65,7 +65,7 @@ def build_rag_graph(services, config):
 
     async def embed_node(state: RAGState) -> dict:
         try:
-            embeddings = await services.embedder.embed_query(_resolved_query(state))
+            embeddings = await services.inference.embed_query(_resolved_query(state))
             return {"embeddings": embeddings}
         except Exception as e:
             logger.error(f"Embedding failed: {e}")
@@ -75,7 +75,7 @@ def build_rag_graph(services, config):
         sparse_vector = None
         retrieval_mode = "dense_only"
         try:
-            sparse_vector = services.sparse_encoder.encode_query(_resolved_query(state))
+            sparse_vector = await services.inference.sparse_query(_resolved_query(state))
             retrieval_mode = "hybrid"
         except Exception as e:
             logger.warning(
@@ -94,13 +94,16 @@ def build_rag_graph(services, config):
         if not state["retrieved_docs"]:
             return {"reranked_docs": []}
         passages = [d["text"] for d in state["retrieved_docs"]]
-        ranked = await services.reranker.rerank(
+        scores = await services.inference.rerank(
             query=_resolved_query(state),
             passages=passages,
-            top_n=config.rag.rerank_top_n,
-            instruction=config.prompts.reranker_instruction,
         )
-        return {"reranked_docs": ranked}
+        ranked = sorted(
+            [{"index": i, "score": s} for i, s in enumerate(scores)],
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+        return {"reranked_docs": ranked[: config.rag.rerank_top_n]}
 
     async def web_fallback_node(state: RAGState) -> dict:
         if should_add_web_fallback(state, config):

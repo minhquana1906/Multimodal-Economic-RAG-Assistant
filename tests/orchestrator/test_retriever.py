@@ -1,4 +1,5 @@
 import pytest
+import pytest_httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -98,3 +99,70 @@ async def test_retriever_dense_only_uses_named_vector():
     assert len(result) == 1
     assert result[0]["id"] == "xyz"
     assert result[0]["url"] == "https://example.com/ttl"
+
+
+# InferenceClient tests
+# Only mock requests to the inference host; let Qdrant version-check traffic pass through.
+_only_inference = pytest.mark.httpx_mock(
+    should_mock=lambda request: request.url.host == "inference"
+)
+
+
+@_only_inference
+@pytest.mark.asyncio
+async def test_inference_client_fetches_dense_and_sparse(httpx_mock):
+    from orchestrator.services.inference import InferenceClient
+
+    httpx_mock.add_response(json={"embeddings": [[0.1, 0.2]]})
+    httpx_mock.add_response(json={"vectors": [{"indices": [1], "values": [0.9]}]})
+
+    client = InferenceClient("http://inference:8001", timeout=30.0)
+    dense = await client.embed_query("GDP Việt Nam?")
+    sparse = await client.sparse_query("GDP Việt Nam?")
+
+    assert dense == [0.1, 0.2]
+    assert sparse == {"indices": [1], "values": [0.9]}
+
+
+@_only_inference
+@pytest.mark.asyncio
+async def test_inference_client_embed_documents(httpx_mock):
+    """embed_documents returns all embeddings for a batch of texts."""
+    from orchestrator.services.inference import InferenceClient
+
+    httpx_mock.add_response(json={"embeddings": [[0.1, 0.2], [0.3, 0.4]]})
+
+    client = InferenceClient("http://inference:8001", timeout=30.0)
+    result = await client.embed_documents(["text one", "text two"])
+
+    assert result == [[0.1, 0.2], [0.3, 0.4]]
+
+
+@_only_inference
+@pytest.mark.asyncio
+async def test_inference_client_sparse_documents(httpx_mock):
+    """sparse_documents returns all sparse vectors for a batch of texts."""
+    from orchestrator.services.inference import InferenceClient
+
+    httpx_mock.add_response(
+        json={"vectors": [{"indices": [1, 2], "values": [0.5, 0.8]}, {"indices": [3], "values": [0.3]}]}
+    )
+
+    client = InferenceClient("http://inference:8001", timeout=30.0)
+    result = await client.sparse_documents(["text one", "text two"])
+
+    assert result == [{"indices": [1, 2], "values": [0.5, 0.8]}, {"indices": [3], "values": [0.3]}]
+
+
+@_only_inference
+@pytest.mark.asyncio
+async def test_inference_client_rerank(httpx_mock):
+    """rerank returns a list of float scores."""
+    from orchestrator.services.inference import InferenceClient
+
+    httpx_mock.add_response(json={"scores": [0.9, 0.4, 0.7]})
+
+    client = InferenceClient("http://inference:8001", timeout=30.0)
+    scores = await client.rerank("query text", ["passage A", "passage B", "passage C"])
+
+    assert scores == [0.9, 0.4, 0.7]
