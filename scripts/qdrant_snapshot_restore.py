@@ -12,8 +12,8 @@ from loguru import logger
 
 QDRANT_URL = os.environ.get("SERVICES__QDRANT_URL", "http://localhost:6333")
 COLLECTION = os.environ.get("SERVICES__QDRANT_COLLECTION", "academic_chunks")
-SNAPSHOT_HF_REPO = os.environ.get("SNAPSHOT_HF_REPO", "")
-SNAPSHOT_FILENAME = os.environ.get("SNAPSHOT_FILENAME", "")
+SNAPSHOT_HF_REPO = os.environ.get("SNAPSHOT_HF_REPO", "quannguyen204/economic-rag-snapshots")
+SNAPSHOT_FILENAME = os.environ.get("SNAPSHOT_FILENAME", "academic_chunks-3178864631652020-2026-04-20-08-40-03.snapshot")
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 
