@@ -23,6 +23,9 @@ class RAGState(TypedDict):
     raw_query: str
     resolved_query: str
     task_type: str
+    # Multimodal image input (serialized OpenAI-style dicts, empty list for text-only)
+    image_parts: list[dict]
+    image_caption: str
     embeddings: list[float]
     retrieved_docs: list[dict]
     reranked_docs: list[dict]
@@ -112,10 +115,18 @@ def build_rag_graph(services, config, *, retrieval_only: bool = False):
 
         user_prompt = build_generation_prompt(state, config)
         system_prompt = resolve_rag_system_prompt(config.prompts)
-        answer = await services.llm.generate(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        image_parts = state.get("image_parts") or []
+        if image_parts and hasattr(services.llm, "generate_with_images"):
+            answer = await services.llm.generate_with_images(
+                system_prompt=system_prompt,
+                user_text=user_prompt,
+                image_content_parts=image_parts,
+            )
+        else:
+            answer = await services.llm.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
         return {"answer": answer, "generation_prompt": user_prompt}
 
     async def citations_node(state: RAGState) -> dict:

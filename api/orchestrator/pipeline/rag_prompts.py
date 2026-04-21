@@ -68,11 +68,26 @@ def serialize_conversation(messages: Iterable[object]) -> str:
     return "\n".join(lines)
 
 
-def build_intent_prompt(messages: Iterable[object], prompts) -> tuple[str, str]:
+def build_intent_prompt(
+    messages: Iterable[object], prompts, *, image_caption: str = ""
+) -> tuple[str, str]:
     transcript = serialize_conversation(messages)
     system_prompt = resolve_prompt_text(prompts, "intent_system_prompt")
-    user_template = resolve_prompt_text(prompts, "intent_user_template")
-    return system_prompt, user_template.format(messages=transcript)
+
+    if image_caption:
+        with_image_tpl = resolve_prompt_text(prompts, "intent_user_template_with_image")
+        if with_image_tpl and "{image_caption}" in with_image_tpl:
+            user_prompt = with_image_tpl.format(messages=transcript, image_caption=image_caption)
+        else:
+            # Fallback: prepend caption to the transcript line
+            augmented = f"[Ảnh đính kèm: {image_caption}]\n{transcript}" if transcript else f"[Ảnh đính kèm: {image_caption}]"
+            base_tpl = resolve_prompt_text(prompts, "intent_user_template")
+            user_prompt = base_tpl.format(messages=augmented)
+    else:
+        base_tpl = resolve_prompt_text(prompts, "intent_user_template")
+        user_prompt = base_tpl.format(messages=transcript)
+
+    return system_prompt, user_prompt
 
 
 def build_direct_prompt(

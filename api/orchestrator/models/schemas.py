@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +12,18 @@ class TextContentPart(BaseModel):
     text: str
 
 
-MessageContent = str | list[TextContentPart]
+class ImageURL(BaseModel):
+    url: str
+    detail: Literal["auto", "low", "high"] = "auto"
+
+
+class ImageContentPart(BaseModel):
+    type: Literal["image_url"] = "image_url"
+    image_url: ImageURL
+
+
+ContentPart = Annotated[TextContentPart | ImageContentPart, Field(discriminator="type")]
+MessageContent = str | list[ContentPart]
 
 
 class Message(BaseModel):
@@ -23,6 +34,19 @@ class Message(BaseModel):
         if isinstance(self.content, str):
             return self.content
         return "".join(part.text for part in self.content if part.type == "text")
+
+    def image_parts(self) -> list[ImageContentPart]:
+        if isinstance(self.content, list):
+            return [p for p in self.content if isinstance(p, ImageContentPart)]
+        return []
+
+    def has_images(self) -> bool:
+        return bool(self.image_parts())
+
+    def to_openai_content(self) -> str | list[dict]:
+        if isinstance(self.content, str):
+            return self.content
+        return [part.model_dump() for part in self.content]
 
 
 class ChatRequest(BaseModel):

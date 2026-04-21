@@ -1,0 +1,21 @@
+# Standalone quantize environment (run in a separate venv on vast.ai RTX 3090)
+# llmcompressor pins accelerate<=1.12.0, incompatible with main project deps.
+#
+# Setup:
+#   python3 -m venv .venv-quantize
+#   source .venv-quantize/bin/activate
+#   pip install -r scripts/requirements-quantize.txt
+#   python scripts/quantize_llmcompressor.py --scheme w4a16 --auto-fallback
+#
+# Or using the Makefile:
+#   make quantize-vlm       # W4A16 GPTQ (tries W4A16, falls back to FP8 if MoE not supported)
+#   make quantize-vlm-fp8   # FP8-dynamic (always works)
+
+torch>=2.5
+transformers>=4.53.0,<5.0.0
+accelerate>=1.6.0,<=1.12.0
+huggingface-hub>=0.24.0
+datasets>=2.0.0
+pillow>=11.0.0
+llmcompressor>=0.10.0
+compressed-tensors>=0.9.0

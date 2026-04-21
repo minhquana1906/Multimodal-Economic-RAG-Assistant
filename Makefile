@@ -26,6 +26,7 @@ GRAY  := \033[0;90m
         up down restart logs ps \
         dev dev-stop dev-build dev-logs dev-ps \
         test test-integration \
+        quantize-setup quantize-vlm quantize-vlm-fp8 \
         _require-env _dev-cache _qdrant-wait _snapshot-restore-curl
 
 # ─── Default ──────────────────────────────────────────────────────────────────
@@ -57,6 +58,10 @@ help:
 	@printf "$(CYAN)Tests$(RESET)\n"
 	@printf "  make test                 Unit tests\n"
 	@printf "  make test-integration     Integration tests\n\n"
+	@printf "$(CYAN)Quantization$(RESET)\n"
+	@printf "  make quantize-setup       Create .venv-quantize (run once on vast.ai)\n"
+	@printf "  make quantize-vlm [ARGS]  Quantize Qwen3.5-4B with W4A16 GPTQ (llm-compressor)\n"
+	@printf "  make quantize-vlm-fp8     Quantize with FP8-dynamic (data-free, safer fallback)\n\n"
 	@printf "$(GRAY)Variables: DOCKERHUB_NAMESPACE=$(DOCKERHUB_NAMESPACE)  IMAGE_TAG=$(IMAGE_TAG)  QDRANT_URL=$(QDRANT_URL)$(RESET)\n"
 
 # ─── E2E (Docker-only, no uv required) ───────────────────────────────────────
@@ -154,6 +159,25 @@ test:
 
 test-integration:
 	uv run pytest -m integration
+
+# ─── Quantization (runs on vast.ai RTX 3090 or local GPU) ────────────────────
+
+## W4A16 GPTQ (primary). Runs in .venv-quantize (separate from main env due to dep conflicts).
+## Setup once: python3 -m venv .venv-quantize && .venv-quantize/bin/pip install -r scripts/requirements-quantize.txt
+## Usage: make quantize-vlm ARGS="--push-to-hub --hub-id <namespace>/Qwen3.5-4B-W4A16"
+quantize-vlm:
+	.venv-quantize/bin/python scripts/quantize_llmcompressor.py --scheme w4a16 $(ARGS)
+
+## FP8 dynamic (data-free, always works on Qwen MoE).
+quantize-vlm-fp8:
+	.venv-quantize/bin/python scripts/quantize_llmcompressor.py --scheme fp8-dynamic $(ARGS)
+
+## Bootstrap quantize venv (run once on vast.ai before quantize-vlm).
+quantize-setup:
+	python3 -m venv .venv-quantize
+	.venv-quantize/bin/pip install --upgrade pip
+	.venv-quantize/bin/pip install -r scripts/requirements-quantize.txt
+	@printf "$(GREEN)✓$(RESET) quantize venv ready — run $(BOLD)make quantize-vlm$(RESET)\n"
 
 # ─── Internal ─────────────────────────────────────────────────────────────────
 
