@@ -91,8 +91,8 @@ services:
                 condition: service_healthy
             inference:
                 condition: service_healthy
-            # llm:
-            #     condition: service_healthy
+            llm:
+                condition: service_healthy
         healthcheck:
             test:
                 [
@@ -170,46 +170,46 @@ services:
         profiles:
             - ingest
     
-    # llm:
-    #     <<: *gpu-reservation
-    #     image: vllm/vllm-openai:v0.18.0-x86_64-cu130
-    #     hostname: llm
-    #     ipc: host
-    #     ports:
-    #         - "8004:8004"
-    #     environment:
-    #         HF_TOKEN: ${HF_TOKEN}
-    #         VLLM_WORKER_MULTIPROC_METHOD: spawn
-    #     volumes:
-    #         - *hf-cache-volume
-    #     command:
-    #         - ${LLM__MODEL}
-    #         - --host
-    #         - 0.0.0.0
-    #         - --port
-    #         - "8004"
-    #         - --served-model-name
-    #         - ${LLM__MODEL}
-    #         - --gpu-memory-utilization
-    #         - ${VLLM__GPU_MEMORY_UTILIZATION:-0.75}
-    #         - --dtype
-    #         - ${VLLM__DTYPE:-half}
-    #         - --max-model-len
-    #         - ${VLLM__MAX_MODEL_LEN:-4096}
-    #         - --max-num-batched-tokens
-    #         - ${VLLM__MAX_NUM_BATCHED_TOKENS:-2048}
-    #         - --max-num-seqs
-    #         - ${VLLM__MAX_NUM_SEQS:-4}
-    #         - --kv-cache-dtype
-    #         - ${VLLM__KV_CACHE_DTYPE:-auto}
-    #         - --enable-prefix-caching
-    #         - --quantization
-    #         - ${VLLM__QUANTIZATION:-compressed-tensors}
-    #     networks:
-    #         - rag-net
-    #     healthcheck:
-    #         test: [ "CMD", "curl", "-fsS", "http://localhost:8004/health" ]
-    #         interval: 20s
-    #         timeout: 10s
-    #         retries: 5
-    #         start_period: 240s
+    llm:
+        <<: *gpu-reservation
+        image: vllm/vllm-openai:v0.18.0-x86_64-cu130
+        hostname: llm
+        ipc: host
+        ports:
+            - "8004:8004"
+        environment:
+            HF_TOKEN: ${HF_TOKEN}
+            VLLM_WORKER_MULTIPROC_METHOD: spawn
+        volumes:
+            - *hf-cache-volume
+        command:
+            - ${LLM__MODEL}
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8004"
+            - --served-model-name
+            - ${LLM__MODEL}
+            - --gpu-memory-utilization
+            - ${VLLM__GPU_MEMORY_UTILIZATION:-0.75}
+            - --dtype
+            - ${VLLM__DTYPE:-half}
+            - --max-model-len
+            - ${VLLM__MAX_MODEL_LEN:-4096}
+            - --max-num-batched-tokens
+            - ${VLLM__MAX_NUM_BATCHED_TOKENS:-2048}
+            - --max-num-seqs
+            - ${VLLM__MAX_NUM_SEQS:-4}
+            - --kv-cache-dtype
+            - ${VLLM__KV_CACHE_DTYPE:-auto}
+            - --enable-prefix-caching
+            - --quantization
+            - ${VLLM__QUANTIZATION:-compressed-tensors}
+        networks:
+            - rag-net
+        healthcheck:
+            test: [ "CMD", "curl", "-fsS", "http://localhost:8004/health" ]
+            interval: 20s
+            timeout: 10s
+            retries: 5
+            start_period: 240s
