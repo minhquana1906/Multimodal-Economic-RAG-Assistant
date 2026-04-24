@@ -154,3 +154,36 @@ def test_finalize_citations_appends_footer_and_normalizes_output():
     ]
     assert "[[cite:" not in result["answer"]
     assert "### Nguồn trích dẫn" in result["answer"]
+
+
+def test_build_intent_prompt_includes_image_captions():
+    from orchestrator.pipeline.rag_prompts import build_intent_prompt
+    from orchestrator.models.schemas import Message
+
+    messages = [Message(role="user", content="What does this show?")]
+    prompts_cfg = _make_config().prompts  # reuses existing _make_config() helper
+    prompts_cfg.intent_user_template = "Hoi thoai:\n{messages}"
+
+    _, user_prompt = build_intent_prompt(
+        messages,
+        prompts_cfg,
+        image_captions=["Biểu đồ GDP Việt Nam 2020-2024"],
+    )
+
+    assert "[Hình ảnh đính kèm]" in user_prompt
+    assert "Biểu đồ GDP Việt Nam 2020-2024" in user_prompt
+    assert "What does this show?" in user_prompt
+
+
+def test_build_intent_prompt_without_captions_unchanged():
+    from orchestrator.pipeline.rag_prompts import build_intent_prompt
+    from orchestrator.models.schemas import Message
+
+    messages = [Message(role="user", content="Lạm phát 2024?")]
+    prompts_cfg = _make_config().prompts
+    prompts_cfg.intent_user_template = "Hoi thoai:\n{messages}"
+
+    _, user_prompt = build_intent_prompt(messages, prompts_cfg)
+
+    assert "[Hình ảnh đính kèm]" not in user_prompt
+    assert "Lạm phát 2024?" in user_prompt

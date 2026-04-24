@@ -35,6 +35,7 @@ from orchestrator.pipeline.rag_prompts import (
 )
 from orchestrator.services import vision as _vision
 from orchestrator.services.conversation import (
+    extract_image_contents,
     extract_latest_user_images,
     extract_latest_user_query,
     normalize_messages,
@@ -147,8 +148,16 @@ async def execute_chat_turn(
 
     intent = {"route": "rag", "resolved_query": rag_query_from_image or raw_query}
     if llm is not None and hasattr(llm, "detect_intent"):
+        image_captions: list[str] = []
+        if hasattr(llm, "caption_image"):
+            images = extract_image_contents(messages)
+            if images:
+                image_captions = [
+                    await llm.caption_image(img, prompts.image_caption_prompt)
+                    for img in images
+                ]
         intent_system_prompt, intent_user_prompt = build_intent_prompt(
-            normalized, prompts, image_caption=caption
+            normalized, prompts, image_captions=image_captions
         )
         intent = await llm.detect_intent(
             system_prompt=intent_system_prompt,
@@ -345,8 +354,16 @@ def create_chat_router(
                 # Detect intent (text-only; caption injected)
                 intent = {"route": "rag", "resolved_query": rag_query_from_image or raw_query}
                 if task_llm is not None and hasattr(task_llm, "detect_intent"):
+                    image_captions: list[str] = []
+                    if hasattr(task_llm, "caption_image"):
+                        images = extract_image_contents(request.messages)
+                        if images:
+                            image_captions = [
+                                await task_llm.caption_image(img, prompts.image_caption_prompt)
+                                for img in images
+                            ]
                     intent_s, intent_u = build_intent_prompt(
-                        normalized, prompts, image_caption=caption
+                        normalized, prompts, image_captions=image_captions
                     )
                     intent = await task_llm.detect_intent(
                         system_prompt=intent_s,

@@ -75,8 +75,8 @@ start: _require-env pull
 		printf "$(GREEN)►$(RESET) Snapshot found — restoring...\n"; \
 		$(MAKE) _snapshot-restore-curl; \
 	fi
-	@printf "$(GREEN)►$(RESET) Bootstrapping collection indexes...\n"
-	@$(MAKE) bootstrap-docker
+	@printf "$(GREEN)►$(RESET) Restore snapshot...\n"
+	@$(MAKE) snapshot-restore
 	@printf "$(GREEN)►$(RESET) Starting all services...\n"
 	@$(COMPOSE) up -d
 	@printf "$(BOLD)$(GREEN)✓ Stack is up$(RESET) — open http://localhost:8080\n"

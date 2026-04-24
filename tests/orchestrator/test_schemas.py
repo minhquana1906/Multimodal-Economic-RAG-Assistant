@@ -128,3 +128,31 @@ def test_stream_chunk_uses_delta_contract():
     )
 
     assert chunk.choices[0].delta.content == "hi"
+
+
+def test_image_content_part_round_trips():
+    from orchestrator.models.schemas import ImageContentPart, ImageUrl
+    part = ImageContentPart(image_url=ImageUrl(url="data:image/png;base64,abc123"))
+    assert part.type == "image_url"
+    assert part.image_url.url == "data:image/png;base64,abc123"
+
+
+def test_message_accepts_image_content_part():
+    from orchestrator.models.schemas import Message, ImageContentPart, ImageUrl, TextContentPart
+    msg = Message(
+        role="user",
+        content=[
+            TextContentPart(text="What is this?"),
+            ImageContentPart(image_url=ImageUrl(url="data:image/png;base64,abc")),
+        ],
+    )
+    assert msg.text_content() == "What is this?"
+
+
+def test_message_text_content_ignores_image_parts():
+    from orchestrator.models.schemas import Message, ImageContentPart, ImageUrl
+    msg = Message(
+        role="user",
+        content=[ImageContentPart(image_url=ImageUrl(url="data:image/png;base64,xyz"))],
+    )
+    assert msg.text_content() == ""

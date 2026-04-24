@@ -32,7 +32,7 @@ class LLMClient:
 
     async def _create_completion(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict],
         *,
         max_tokens: int | None = None,
     ) -> tuple[str | None, int, int]:
@@ -63,11 +63,13 @@ class LLMClient:
                 "LLM",
                 f"model={self._model} tokens={tokens} latency_ms={latency_ms}",
             )
+            logger.trace(f"generate response: {(content or '')[:500]}")
             return content or ""
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
             return "Xin lỗi, không thể tạo phản hồi."
 
+    @traceable(name="Complete Prompt", run_type="llm")
     async def complete_prompt(self, prompt: str, max_tokens: int | None = None) -> str:
         """Handle auxiliary UI prompts without entering the traced RAG path."""
         try:
@@ -79,11 +81,13 @@ class LLMClient:
                 "LLM",
                 f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=aux",
             )
+            logger.trace(f"complete_prompt response: {(content or '')[:500]}")
             return content or ""
         except Exception as e:
             logger.error(f"Auxiliary LLM generation error: {e}")
             return ""
 
+    @traceable(name="Detect Intent", run_type="llm")
     async def detect_intent(
         self,
         *,
@@ -94,7 +98,7 @@ class LLMClient:
         """Return routing intent for the conversation.
 
         Returns {"route": "direct"|"rag", "resolved_query": "..."} and falls back to
-        {"route": "rag", "resolved_query": fallback_query} on invalid JSON.
+        {"route": "direct", "resolved_query": fallback_query} on invalid JSON.
         """
         try:
             content, _, _ = await self._create_completion(
@@ -105,6 +109,7 @@ class LLMClient:
                 max_tokens=128,
             )
             raw = (content or "").strip()
+            logger.trace(f"detect_intent raw_response: {raw[:200]}")
             # Strip markdown code block if present
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
@@ -112,14 +117,41 @@ class LLMClient:
                     raw = raw[4:]
                 raw = raw.strip()
             parsed = json.loads(raw)
-            route = parsed.get("route", "rag")
+            route = parsed.get("route", "direct")
             if route not in ("direct", "rag"):
-                route = "rag"
+                route = "direct"
             resolved_query = parsed.get("resolved_query") or fallback_query
+            logger.trace(f"detect_intent parsed: route={route} resolved_query={resolved_query[:100]}")
             return {"route": route, "resolved_query": resolved_query}
         except Exception as e:
-            logger.warning(f"detect_intent failed, defaulting to rag: {e}")
-            return {"route": "rag", "resolved_query": fallback_query}
+            logger.warning(f"detect_intent failed, defaulting to direct: {e}")
+            return {"route": "direct", "resolved_query": fallback_query}
+
+    @traceable(name="Caption Image", run_type="llm")
+    async def caption_image(self, image_url: str, caption_prompt: str) -> str:
+        """Generate a brief caption for an image, noting economic relevance."""
+        try:
+            content, tokens, latency_ms = await self._create_completion(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                            {"type": "text", "text": caption_prompt},
+                        ],
+                    }
+                ],
+                max_tokens=100,
+            )
+            logger.trace(f"caption_image response: {(content or '')[:200]}")
+            logger.log(
+                "LLM",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=caption",
+            )
+            return content or ""
+        except Exception as e:
+            logger.error(f"Image captioning error: {e}")
+            return ""
 
     async def describe_image(
         self,
@@ -182,10 +214,11 @@ class LLMClient:
             return "Xin lỗi, không thể tạo phản hồi."
 
     @traceable(name="Stream Answer", run_type="llm")
-    async def stream_chat(self, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
+    async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
         """Yield delta text chunks from provider-side streaming. Does not buffer."""
         t0 = time.monotonic()
         total_chars = 0
+        accumulated = []
         try:
             stream = await self._client.chat.completions.create(
                 model=self._model,
@@ -199,12 +232,14 @@ class LLMClient:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta and delta.content:
                     total_chars += len(delta.content)
+                    accumulated.append(delta.content)
                     yield delta.content
             latency_ms = int((time.monotonic() - t0) * 1000)
             logger.log(
                 "LLM",
                 f"model={self._model} chars={total_chars} latency_ms={latency_ms} task=stream",
             )
+            logger.trace(f"stream_chat response: {''.join(accumulated)[:500]}")
         except Exception as e:
             logger.error(f"LLM streaming error: {e}")
             yield "Xin lỗi, không thể tạo phản hồi."

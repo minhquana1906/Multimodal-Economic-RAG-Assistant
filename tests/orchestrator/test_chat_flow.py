@@ -157,3 +157,60 @@ async def test_direct_route_uses_resolved_query():
     assert resolved in call_kwargs["user_prompt"]
     assert "##" in call_kwargs["user_prompt"]
     assert "USER: giải thích lạm phát" in call_kwargs["user_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_caption_image_called_before_detect_intent_for_image_message():
+    """When the latest user message contains an image, caption_image is called before detect_intent."""
+    from orchestrator.routers.chat import execute_chat_turn
+    from unittest.mock import AsyncMock, MagicMock, call
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value={"answer": "ok", "citations": []})
+
+    mock_llm = MagicMock()
+    mock_llm.detect_intent = AsyncMock(return_value={"route": "direct", "resolved_query": "what is this?"})
+    mock_llm.generate = AsyncMock(return_value="It's a cat.")
+    mock_llm.caption_image = AsyncMock(return_value="A photo of a cat outdoors.")
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is this?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ],
+        }
+    ]
+
+    result = await execute_chat_turn(mock_graph, mock_llm, messages, max_tokens=None)
+
+    mock_llm.caption_image.assert_awaited_once()
+    call_kwargs = mock_llm.caption_image.call_args
+    assert "data:image/png;base64,abc" in str(call_kwargs)
+
+    mock_llm.detect_intent.assert_awaited_once()
+    assert result["task_type"] == "direct"
+
+
+@pytest.mark.asyncio
+async def test_caption_image_not_called_for_text_only_message():
+    """Text-only messages skip captioning entirely."""
+    from orchestrator.routers.chat import execute_chat_turn
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value={"answer": "ok", "citations": []})
+
+    mock_llm = MagicMock()
+    mock_llm.detect_intent = AsyncMock(return_value={"route": "rag", "resolved_query": "GDP?"})
+    mock_llm.caption_image = AsyncMock(return_value="should not be called")
+
+    result = await execute_chat_turn(
+        mock_graph,
+        mock_llm,
+        [{"role": "user", "content": "GDP Việt Nam?"}],
+        max_tokens=None,
+    )
+
+    mock_llm.caption_image.assert_not_awaited()

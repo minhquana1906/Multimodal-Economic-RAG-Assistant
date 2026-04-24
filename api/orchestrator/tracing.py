@@ -47,7 +47,8 @@ def setup_logging(config: ObservabilityConfig) -> None:
 
     logger.configure(extra={"request_id": "-"})
 
-    logger.add(sys.stderr, format=LOG_FORMAT, level=config.log_level, colorize=True)
+    effective_level = "TRACE" if config.app_mode == "dev" else config.log_level
+    logger.add(sys.stderr, format=LOG_FORMAT, level=effective_level, colorize=True)
 
     for name, no, color in DOMAIN_LEVELS:
         try:
