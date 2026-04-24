@@ -22,7 +22,7 @@ GRAY  := \033[0;90m
 .PHONY: help \
         start stop \
         setup pull build push \
-        bootstrap bootstrap-docker snapshot-restore \
+        snapshot-restore \
         up down restart logs ps \
         dev dev-stop dev-build dev-logs dev-ps \
         test test-integration \
@@ -42,8 +42,6 @@ help:
 	@printf "  make push                 Push images to Docker Hub\n\n"
 	@printf "$(CYAN)Data$(RESET)\n"
 	@printf "  make snapshot-restore     Upload data/*.snapshot → Qdrant  (needs uv)\n"
-	@printf "  make bootstrap            Create collection + indexes locally (needs uv)\n"
-	@printf "  make bootstrap-docker     Same, but runs inside the orchestrator container\n\n"
 	@printf "$(CYAN)Runtime$(RESET)\n"
 	@printf "  make up      [SERVICE]    Start services\n"
 	@printf "  make down    [SERVICE]    Stop services\n"
@@ -75,8 +73,6 @@ start: _require-env pull
 		printf "$(GREEN)►$(RESET) Snapshot found — restoring...\n"; \
 		$(MAKE) _snapshot-restore-curl; \
 	fi
-	@printf "$(GREEN)►$(RESET) Restore snapshot...\n"
-	@$(MAKE) snapshot-restore
 	@printf "$(GREEN)►$(RESET) Starting all services...\n"
 	@$(COMPOSE) up -d
 	@printf "$(BOLD)$(GREEN)✓ Stack is up$(RESET) — open http://localhost:8080\n"
@@ -110,13 +106,6 @@ push:
 ## Requires uv — use on dev machines or CI
 snapshot-restore:
 	SERVICES__QDRANT_URL=$(QDRANT_URL) uv run python scripts/qdrant_snapshot_restore.py
-
-bootstrap:
-	SERVICES__QDRANT_URL=$(QDRANT_URL) uv run python scripts/qdrant_bootstrap.py
-
-## Runs inside orchestrator container — no local Python needed
-bootstrap-docker:
-	$(COMPOSE) --profile tools run --rm bootstrap
 
 # ─── Runtime ──────────────────────────────────────────────────────────────────
 

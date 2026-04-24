@@ -28,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--model-id", default="Qwen/Qwen3.5-4B", help="HuggingFace model ID to quantize")
     p.add_argument("--scheme", choices=["w4a16", "fp8-dynamic"], default="w4a16", help="Quantization scheme")
     p.add_argument("--output-dir", default=None, help="Output dir (default: <model-id-basename>-<SCHEME>-G128)")
-    p.add_argument("--num-calibration-samples", type=int, default=256, help="Calibration samples (W4A16 only)")
+    p.add_argument("--num-calibration-samples", type=int, default=512, help="Calibration samples (W4A16 only)")
     p.add_argument("--max-seq-length", type=int, default=2048, help="Max sequence length for calibration")
     p.add_argument("--calibration-dataset", default="khoalnd/EconVNNews", help="HF dataset for text calibration")
     p.add_argument("--multimodal-calib-ratio", type=float, default=0.3, help="Fraction of calibration samples that include an image (0 = text-only)")

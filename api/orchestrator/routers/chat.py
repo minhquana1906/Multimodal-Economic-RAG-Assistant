@@ -89,8 +89,12 @@ async def _preflight_image(
         return [], "", raw_query
 
     max_imgs = getattr(vision_cfg, "max_images_per_turn", 4) if vision_cfg else 4
-    max_pixels = getattr(vision_cfg, "max_image_pixels", 1_048_576) if vision_cfg else 1_048_576
-    max_bytes = getattr(vision_cfg, "max_image_bytes", 4_000_000) if vision_cfg else 4_000_000
+    max_pixels = (
+        getattr(vision_cfg, "max_image_pixels", 1_048_576) if vision_cfg else 1_048_576
+    )
+    max_bytes = (
+        getattr(vision_cfg, "max_image_bytes", 4_000_000) if vision_cfg else 4_000_000
+    )
 
     capped = image_parts[:max_imgs]
     processed = [
@@ -167,12 +171,16 @@ async def execute_chat_turn(
 
     route = intent.get("route", "rag")
     resolved_query = intent.get("resolved_query") or rag_query_from_image or raw_query
-    logger.info(f"route_decided route={route} resolved_query_len={len(resolved_query)} has_images={bool(processed_images)}")
+    logger.info(
+        f"route_decided route={route} resolved_query_len={len(resolved_query)} has_images={bool(processed_images)}"
+    )
 
     if route == "direct" and llm is not None:
         use_web, web_reason = (False, "disabled")
         if web_search is not None and settings is not None:
-            use_web, web_reason = should_use_web_search_for_direct(resolved_query, settings)
+            use_web, web_reason = should_use_web_search_for_direct(
+                resolved_query, settings
+            )
 
         if use_web:
             logger.info(f"direct_web_search=true reason={web_reason}")
@@ -202,7 +210,9 @@ async def execute_chat_turn(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                 )
-                context_limit = getattr(getattr(settings, "rag", None), "context_limit", 10)
+                context_limit = getattr(
+                    getattr(settings, "rag", None), "context_limit", 10
+                )
                 pseudo_state = {
                     "answer": answer,
                     "final_context": web_context,
@@ -311,7 +321,9 @@ def create_chat_router(
             )
             return ChatResponse(
                 model=request.model,
-                choices=[ChatCompletionChoice(message=AssistantMessage(content=answer))],
+                choices=[
+                    ChatCompletionChoice(message=AssistantMessage(content=answer))
+                ],
             )
 
     def _stream_response(request: ChatRequest, t_start: float):
@@ -328,6 +340,7 @@ def create_chat_router(
             # Wrap the entire streaming flow under one LangSmith parent span.
             try:
                 from langsmith import trace as _ls_trace
+
                 ls_ctx = _ls_trace(
                     "Stream Chat Turn",
                     run_type="chain",
@@ -335,6 +348,7 @@ def create_chat_router(
                 )
             except Exception:
                 import contextlib
+
                 ls_ctx = contextlib.nullcontext()
 
             stream_messages: list[dict] = []
@@ -343,16 +357,21 @@ def create_chat_router(
             async with ls_ctx:
                 # Vision preflight
                 vision_cfg = getattr(settings, "llm", None) if settings else None
-                processed_images, caption, rag_query_from_image = await _preflight_image(
-                    llm=task_llm,
-                    image_parts=image_parts_raw,
-                    raw_query=raw_query,
-                    prompts=prompts,
-                    vision_cfg=vision_cfg,
+                processed_images, caption, rag_query_from_image = (
+                    await _preflight_image(
+                        llm=task_llm,
+                        image_parts=image_parts_raw,
+                        raw_query=raw_query,
+                        prompts=prompts,
+                        vision_cfg=vision_cfg,
+                    )
                 )
 
                 # Detect intent (text-only; caption injected)
-                intent = {"route": "rag", "resolved_query": rag_query_from_image or raw_query}
+                intent = {
+                    "route": "rag",
+                    "resolved_query": rag_query_from_image or raw_query,
+                }
                 if task_llm is not None and hasattr(task_llm, "detect_intent"):
                     image_captions: list[str] = []
                     if hasattr(task_llm, "caption_image"):
@@ -372,8 +391,12 @@ def create_chat_router(
                     )
 
                 route = intent.get("route", "rag")
-                resolved_query = intent.get("resolved_query") or rag_query_from_image or raw_query
-                logger.info(f"route_decided route={route} resolved_query_len={len(resolved_query)} has_images={bool(processed_images)}")
+                resolved_query = (
+                    intent.get("resolved_query") or rag_query_from_image or raw_query
+                )
+                logger.info(
+                    f"route_decided route={route} resolved_query_len={len(resolved_query)} has_images={bool(processed_images)}"
+                )
 
                 def _user_content(text: str) -> "str | list":
                     if not processed_images:
@@ -413,9 +436,14 @@ def create_chat_router(
                             context_limit = getattr(
                                 getattr(settings, "rag", None), "context_limit", 10
                             )
-                            citation_suffix = build_citation_section(web_context, context_limit)
+                            citation_suffix = build_citation_section(
+                                web_context, context_limit
+                            )
                             stream_messages = [
-                                {"role": "system", "content": resolve_rag_system_prompt(prompts)},
+                                {
+                                    "role": "system",
+                                    "content": resolve_rag_system_prompt(prompts),
+                                },
                                 {"role": "user", "content": _user_content(user_prompt)},
                             ]
                             route = "direct_web"
@@ -431,7 +459,10 @@ def create_chat_router(
                         )
                         stream_messages = [
                             {"role": "system", "content": prompts.direct_system_prompt},
-                            {"role": "user", "content": _user_content(direct_user_prompt)},
+                            {
+                                "role": "user",
+                                "content": _user_content(direct_user_prompt),
+                            },
                         ]
 
                 else:
@@ -446,7 +477,9 @@ def create_chat_router(
                             )
                         )
                         ctx["web_results"] = len(retrieval_state.get("web_results", []))
-                        ctx["context_items"] = len(retrieval_state.get("final_context", []))
+                        ctx["context_items"] = len(
+                            retrieval_state.get("final_context", [])
+                        )
 
                     final_context = retrieval_state.get("final_context", [])
                     if settings is not None:
@@ -475,19 +508,29 @@ def create_chat_router(
                         is_first = False
                         chunk = ChatStreamChunk(
                             model=request.model,
-                            choices=[ChatStreamChoice(delta=ChatDelta(role=role, content=delta))],
+                            choices=[
+                                ChatStreamChoice(
+                                    delta=ChatDelta(role=role, content=delta)
+                                )
+                            ],
                         )
                         yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
 
                     if citation_suffix:
                         cite_chunk = ChatStreamChunk(
                             model=request.model,
-                            choices=[ChatStreamChoice(delta=ChatDelta(content=citation_suffix))],
+                            choices=[
+                                ChatStreamChoice(
+                                    delta=ChatDelta(content=citation_suffix)
+                                )
+                            ],
                         )
                         yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
 
             total_ms = int((time.monotonic() - t_start) * 1000)
-            logger.info(f"request_completed route={route} total_ms={total_ms} stream=true")
+            logger.info(
+                f"request_completed route={route} total_ms={total_ms} stream=true"
+            )
 
             stop_chunk = ChatStreamChunk(
                 model=request.model,

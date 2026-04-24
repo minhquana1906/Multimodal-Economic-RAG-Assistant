@@ -163,7 +163,9 @@ class LLMClient:
     ) -> dict:
         """Return {"caption": "...", "rag_query": "..."} from MLLM analysis of image(s)."""
         prompt = user_template.format(user_text=user_text or "Mô tả ảnh này.")
-        user_content: list[Any] = list(image_content_parts) + [{"type": "text", "text": prompt}]
+        user_content: list[Any] = list(image_content_parts) + [
+            {"type": "text", "text": prompt}
+        ]
         try:
             content, _, _ = await self._create_completion(
                 [
@@ -196,7 +198,9 @@ class LLMClient:
         image_content_parts: list[dict],
     ) -> str:
         """Generate response with image(s) + text using the multimodal LLM."""
-        user_content: list[Any] = list(image_content_parts) + [{"type": "text", "text": user_text}]
+        user_content: list[Any] = list(image_content_parts) + [
+            {"type": "text", "text": user_text}
+        ]
         try:
             content, tokens, latency_ms = await self._create_completion(
                 [
