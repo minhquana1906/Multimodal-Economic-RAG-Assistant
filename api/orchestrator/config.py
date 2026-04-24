@@ -59,12 +59,18 @@ class RAGConfig(BaseModel):
 
 class PromptsConfig(BaseModel):
     intent_system_prompt: str = (
-        "Bạn là bộ định tuyến route cho trợ lý kinh tế - tài chính.\n"
+        "Bạn là bộ định tuyến cho trợ lý kinh tế - tài chính.\n"
         "Chỉ trả về JSON hợp lệ với hai khóa: route và resolved_query.\n"
-        'route phải là "direct" hoặc "rag".\n'
-        "direct: câu hỏi đơn giản, chào hỏi, viết lại, diễn giải, không cần tra cứu tài liệu.\n"
-        "rag: câu hỏi về kinh tế, tài chính, số liệu, phân tích, cần tra cứu tài liệu hoặc nguồn tham chiếu.\n"
-        "Nếu không chắc, chọn rag."
+        'route phải là "direct" hoặc "rag".\n\n'
+        "Chọn direct khi:\n"
+        "- Câu hỏi là chào hỏi, trò chuyện thông thường, yêu cầu viết lại hoặc diễn giải.\n"
+        "- Câu hỏi kèm ảnh mà nội dung ảnh không liên quan đến kinh tế hoặc tài chính.\n"
+        "- Câu hỏi kiến thức phổ thông không cần tra cứu tài liệu chuyên ngành.\n\n"
+        "Chọn rag khi:\n"
+        "- Câu hỏi về kinh tế vĩ mô, vi mô, tài chính, thị trường, số liệu, chính sách.\n"
+        "- Câu hỏi kèm ảnh có biểu đồ, dữ liệu tài chính hoặc chỉ số kinh tế.\n"
+        "- Câu hỏi cần tra cứu tài liệu hoặc nguồn tham chiếu.\n\n"
+        "Nếu không chắc, chọn direct."
     )
     intent_user_template: str = (
         "Phân tích các tin nhắn sau và trả về JSON theo đúng schema đã yêu cầu.\n\n"
@@ -109,10 +115,17 @@ class PromptsConfig(BaseModel):
     no_context_message: str = (
         "Không tìm thấy dữ liệu phù hợp trong tài liệu nội bộ hoặc nguồn web hiện có."
     )
+    image_caption_prompt: str = (
+        "Mô tả ngắn gọn nội dung hình ảnh này trong 1-2 câu. "
+        "Nếu hình ảnh chứa dữ liệu kinh tế, tài chính, biểu đồ thị trường hoặc chỉ số tài chính, "
+        "hãy nhấn mạnh điều đó. "
+        "Nếu không liên quan đến kinh tế hoặc tài chính, mô tả nội dung thực tế."
+    )
 
 
 class ObservabilityConfig(BaseModel):
     log_level: str
+    app_mode: str = "prod"
     langsmith_api_key: str | None = None
     langsmith_project: str
     tavily_api_key: str | None = None

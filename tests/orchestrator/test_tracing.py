@@ -49,6 +49,21 @@ def test_setup_langsmith_with_key_sets_env(monkeypatch):
     assert os.environ["LANGCHAIN_PROJECT"] == "proj"
 
 
+def test_setup_logging_uses_trace_level_in_dev_mode():
+    import sys
+    from loguru import logger
+    from orchestrator.config import ObservabilityConfig
+    from orchestrator.tracing import setup_logging
+
+    cfg = ObservabilityConfig(log_level="INFO", langsmith_project="proj", app_mode="dev")
+    setup_logging(cfg)
+
+    # Find the stderr sink and verify its effective level is TRACE (no=5)
+    handlers = logger._core.handlers  # loguru internal
+    levels = [h._levelno for h in handlers.values()]
+    assert any(lvl <= 5 for lvl in levels), f"Expected TRACE sink, got levels: {levels}"
+
+
 @pytest.mark.asyncio
 async def test_execute_chat_turn_root_output_excludes_generation_prompt():
     from orchestrator.routers.chat import execute_chat_turn

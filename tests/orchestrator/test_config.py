@@ -127,7 +127,7 @@ def test_prompts_config_defaults():
     cfg = PromptsConfig()
     assert "route" in cfg.intent_system_prompt.lower()
     assert "{messages}" in cfg.intent_user_template
-    assert "Viết lại" in cfg.direct_system_prompt
+    assert "viết lại" in cfg.direct_system_prompt
     assert "header `##`" in cfg.direct_response_contract
     assert "{conversation}" in cfg.direct_user_template
     assert "{question}" in cfg.direct_user_template
@@ -163,3 +163,31 @@ def test_observability_api_keys_can_be_omitted(tmp_path):
     settings = Settings(_env_file=env_file)
 
     assert settings.observability.langsmith_api_key is None
+
+
+def test_observability_app_mode_defaults_to_prod():
+    from orchestrator.config import ObservabilityConfig
+    cfg = ObservabilityConfig(log_level="INFO", langsmith_project="proj")
+    assert cfg.app_mode == "prod"
+
+
+def test_observability_app_mode_accepts_dev():
+    from orchestrator.config import ObservabilityConfig
+    cfg = ObservabilityConfig(log_level="INFO", langsmith_project="proj", app_mode="dev")
+    assert cfg.app_mode == "dev"
+
+
+def test_prompts_config_has_image_caption_prompt():
+    from orchestrator.config import PromptsConfig
+    cfg = PromptsConfig()
+    assert len(cfg.image_caption_prompt) > 20
+    assert "kinh tế" in cfg.image_caption_prompt or "tài chính" in cfg.image_caption_prompt
+
+
+def test_intent_system_prompt_defaults_to_direct_on_uncertainty():
+    from orchestrator.config import PromptsConfig
+    cfg = PromptsConfig()
+    assert "direct" in cfg.intent_system_prompt
+    # Must NOT bias toward rag on uncertainty
+    assert "không chắc, chọn rag" not in cfg.intent_system_prompt
+    assert "không chắc, chọn direct" in cfg.intent_system_prompt
