@@ -33,7 +33,7 @@ from orchestrator.pipeline.rag_prompts import (
     build_intent_prompt,
     resolve_rag_system_prompt,
 )
-from orchestrator.services.conversation import extract_latest_user_query, normalize_messages
+from orchestrator.services.conversation import extract_image_contents, extract_latest_user_query, normalize_messages
 from orchestrator.tracing import log_phase
 
 
@@ -80,7 +80,17 @@ async def execute_chat_turn(
 
     intent = {"route": "rag", "resolved_query": raw_query}
     if llm is not None and hasattr(llm, "detect_intent"):
-        intent_system_prompt, intent_user_prompt = build_intent_prompt(normalized, prompts)
+        image_captions: list[str] = []
+        if hasattr(llm, "caption_image"):
+            images = extract_image_contents(messages)
+            if images:
+                image_captions = [
+                    await llm.caption_image(img, prompts.image_caption_prompt)
+                    for img in images
+                ]
+        intent_system_prompt, intent_user_prompt = build_intent_prompt(
+            normalized, prompts, image_captions=image_captions
+        )
         intent = await llm.detect_intent(
             system_prompt=intent_system_prompt,
             user_prompt=intent_user_prompt,
@@ -250,7 +260,17 @@ def create_chat_router(
                 # Detect intent
                 intent = {"route": "rag", "resolved_query": raw_query}
                 if task_llm is not None and hasattr(task_llm, "detect_intent"):
-                    intent_s, intent_u = build_intent_prompt(normalized, prompts)
+                    image_captions: list[str] = []
+                    if hasattr(task_llm, "caption_image"):
+                        images = extract_image_contents(request.messages)
+                        if images:
+                            image_captions = [
+                                await task_llm.caption_image(img, prompts.image_caption_prompt)
+                                for img in images
+                            ]
+                    intent_s, intent_u = build_intent_prompt(
+                        normalized, prompts, image_captions=image_captions
+                    )
                     intent = await task_llm.detect_intent(
                         system_prompt=intent_s,
                         user_prompt=intent_u,

@@ -31,7 +31,8 @@ def extract_latest_user_query(messages: Iterable[Message]) -> str:
 def extract_image_contents(messages: Iterable[Message]) -> list[str]:
     """Return image URLs from the latest user message's content parts."""
     from orchestrator.models.schemas import ImageContentPart
-    for message in reversed(list(messages)):
+    validated = [m if isinstance(m, Message) else Message.model_validate(m) for m in messages]
+    for message in reversed(validated):
         if message.role == "user":
             if isinstance(message.content, list):
                 return [
