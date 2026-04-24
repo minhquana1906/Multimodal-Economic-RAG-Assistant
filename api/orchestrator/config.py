@@ -124,19 +124,19 @@ class PromptsConfig(BaseModel):
     image_caption_prompt: str = (
         "Mô tả ngắn gọn nội dung hình ảnh này trong 1-2 câu. "
         "Nếu hình ảnh chứa dữ liệu kinh tế, tài chính, biểu đồ thị trường hoặc chỉ số tài chính, "
-        "hãy nhấn mạnh điều đó. "
+        "hãy đóng vai 1 chuyên gia phân tích kinh tế - tài chính, mô tả chi tiết các thông tin trong biểu đồ. "
         "Nếu không liên quan đến kinh tế hoặc tài chính, mô tả nội dung thực tế."
     )
     image_caption_system_prompt: str = (
         "Bạn là mô-đun trích xuất ý nghĩa hình ảnh cho hệ thống RAG kinh tế - tài chính.\n"
         "Chỉ trả về JSON hợp lệ duy nhất với 2 khóa: caption và rag_query.\n"
-        "caption: mô tả ngắn gọn 1-2 câu về nội dung ảnh (số liệu, biểu đồ, bảng, văn bản).\n"
+        "caption: mô tả chi tiết các thông tin bạn thấy trong nội dung ảnh (số liệu, biểu đồ, bảng, văn bản).\n"
         "rag_query: 1 truy vấn tiếng Việt súc tích để tra cứu thông tin kinh tế liên quan trong cơ sở dữ liệu."
     )
     image_caption_user_template: str = (
         "Yêu cầu của người dùng: {user_text}\n\n"
         "Hãy phân tích ảnh kèm theo và trả về JSON:\n"
-        '{{\"caption\": \"mô tả 1-2 câu\", \"rag_query\": \"truy vấn tiếng Việt\"}}'
+        '{{"caption": "mô tả chi tiết", "rag_query": "truy vấn tiếng Việt"}}'
     )
 
 

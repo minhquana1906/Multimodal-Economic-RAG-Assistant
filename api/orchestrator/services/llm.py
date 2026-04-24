@@ -61,9 +61,8 @@ class LLMClient:
             )
             logger.log(
                 "LLM",
-                f"model={self._model} tokens={tokens} latency_ms={latency_ms}",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} response_preview={(content or '')[:120]!r}",
             )
-            logger.trace(f"generate response: {(content or '')[:500]}")
             return content or ""
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
@@ -79,9 +78,8 @@ class LLMClient:
             )
             logger.log(
                 "LLM",
-                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=aux",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=aux response_preview={(content or '')[:120]!r}",
             )
-            logger.trace(f"complete_prompt response: {(content or '')[:500]}")
             return content or ""
         except Exception as e:
             logger.error(f"Auxiliary LLM generation error: {e}")
@@ -109,7 +107,6 @@ class LLMClient:
                 max_tokens=128,
             )
             raw = (content or "").strip()
-            logger.trace(f"detect_intent raw_response: {raw[:200]}")
             # Strip markdown code block if present
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
@@ -121,7 +118,10 @@ class LLMClient:
             if route not in ("direct", "rag"):
                 route = "direct"
             resolved_query = parsed.get("resolved_query") or fallback_query
-            logger.trace(f"detect_intent parsed: route={route} resolved_query={resolved_query[:100]}")
+            logger.log(
+                "LLM",
+                f"model={self._model} task=intent route={route} resolved_query={resolved_query[:80]!r}",
+            )
             return {"route": route, "resolved_query": resolved_query}
         except Exception as e:
             logger.warning(f"detect_intent failed, defaulting to direct: {e}")
@@ -143,16 +143,16 @@ class LLMClient:
                 ],
                 max_tokens=100,
             )
-            logger.trace(f"caption_image response: {(content or '')[:200]}")
             logger.log(
                 "LLM",
-                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=caption",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=caption response_preview={(content or '')[:80]!r}",
             )
             return content or ""
         except Exception as e:
             logger.error(f"Image captioning error: {e}")
             return ""
 
+    @traceable(name="Describe Image", run_type="llm")
     async def describe_image(
         self,
         user_text: str,
@@ -167,7 +167,7 @@ class LLMClient:
             {"type": "text", "text": prompt}
         ]
         try:
-            content, _, _ = await self._create_completion(
+            content, tokens, latency_ms = await self._create_completion(
                 [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
@@ -181,10 +181,13 @@ class LLMClient:
                     raw = raw[4:]
                 raw = raw.strip()
             parsed = json.loads(raw)
-            return {
-                "caption": str(parsed.get("caption", "")),
-                "rag_query": str(parsed.get("rag_query", "") or user_text),
-            }
+            caption = str(parsed.get("caption", ""))
+            rag_query = str(parsed.get("rag_query", "") or user_text)
+            logger.log(
+                "LLM",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=describe caption_preview={caption[:80]!r}",
+            )
+            return {"caption": caption, "rag_query": rag_query}
         except Exception as e:
             logger.warning(f"describe_image failed: {e}")
             return {"caption": "", "rag_query": user_text}
@@ -210,7 +213,7 @@ class LLMClient:
             )
             logger.log(
                 "LLM",
-                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=multimodal",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=multimodal response_preview={(content or '')[:120]!r}",
             )
             return content or ""
         except Exception as e:
@@ -239,11 +242,11 @@ class LLMClient:
                     accumulated.append(delta.content)
                     yield delta.content
             latency_ms = int((time.monotonic() - t0) * 1000)
+            preview = "".join(accumulated)[:120]
             logger.log(
                 "LLM",
-                f"model={self._model} chars={total_chars} latency_ms={latency_ms} task=stream",
+                f"model={self._model} chars={total_chars} latency_ms={latency_ms} task=stream response_preview={preview!r}",
             )
-            logger.trace(f"stream_chat response: {''.join(accumulated)[:500]}")
         except Exception as e:
             logger.error(f"LLM streaming error: {e}")
             yield "Xin lỗi, không thể tạo phản hồi."

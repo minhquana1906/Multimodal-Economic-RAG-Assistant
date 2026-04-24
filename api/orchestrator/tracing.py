@@ -58,6 +58,10 @@ def setup_logging(config: ObservabilityConfig) -> None:
 
     logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
 
+    # Suppress noisy HTTP-client debug logs that flood output with base64 image bodies
+    for _noisy_lib in ("httpx", "httpcore", "openai", "anthropic", "urllib3"):
+        logging.getLogger(_noisy_lib).setLevel(logging.WARNING)
+
 
 @asynccontextmanager
 async def log_phase(phase: str, **meta) -> AsyncIterator[dict]:

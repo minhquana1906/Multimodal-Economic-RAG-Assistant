@@ -35,9 +35,9 @@ from orchestrator.pipeline.rag_prompts import (
 )
 from orchestrator.services import vision as _vision
 from orchestrator.services.conversation import (
-    extract_image_contents,
     extract_latest_user_images,
     extract_latest_user_query,
+    find_recent_user_images,
     normalize_messages,
 )
 from orchestrator.tracing import log_phase
@@ -131,7 +131,8 @@ async def execute_chat_turn(
     prompts = prompts or PromptsConfig()
     normalized = normalize_messages(messages)
     raw_query = extract_latest_user_query(normalized)
-    image_parts_raw = extract_latest_user_images(normalized)
+    # Look at latest message first; fall back to any earlier image in history
+    image_parts_raw = extract_latest_user_images(normalized) or find_recent_user_images(normalized)
 
     # Allow image-only messages
     if not raw_query and image_parts_raw:
@@ -150,16 +151,10 @@ async def execute_chat_turn(
         vision_cfg=vision_cfg,
     )
 
+    # Reuse caption from _preflight_image — avoids a redundant second LLM call
     intent = {"route": "rag", "resolved_query": rag_query_from_image or raw_query}
     if llm is not None and hasattr(llm, "detect_intent"):
-        image_captions: list[str] = []
-        if hasattr(llm, "caption_image"):
-            images = extract_image_contents(messages)
-            if images:
-                image_captions = [
-                    await llm.caption_image(img, prompts.image_caption_prompt)
-                    for img in images
-                ]
+        image_captions: list[str] = [caption] if caption else []
         intent_system_prompt, intent_user_prompt = build_intent_prompt(
             normalized, prompts, image_captions=image_captions
         )
@@ -329,7 +324,8 @@ def create_chat_router(
     def _stream_response(request: ChatRequest, t_start: float):
         normalized = normalize_messages(request.messages)
         raw_query = extract_latest_user_query(normalized)
-        image_parts_raw = extract_latest_user_images(normalized)
+        # Fall back to any earlier image in conversation history
+        image_parts_raw = extract_latest_user_images(normalized) or find_recent_user_images(normalized)
         if not raw_query and image_parts_raw:
             raw_query = "Phân tích nội dung ảnh này"
         route = "rag"
@@ -342,7 +338,7 @@ def create_chat_router(
                 from langsmith import trace as _ls_trace
 
                 ls_ctx = _ls_trace(
-                    "Stream Chat Turn",
+                    "Stream Chat",
                     run_type="chain",
                     inputs={"query": raw_query, "model": request.model},
                 )
@@ -353,8 +349,9 @@ def create_chat_router(
 
             stream_messages: list[dict] = []
             citation_suffix = ""
+            resolved_query = raw_query
 
-            async with ls_ctx:
+            async with ls_ctx as _ls_run:
                 # Vision preflight
                 vision_cfg = getattr(settings, "llm", None) if settings else None
                 processed_images, caption, rag_query_from_image = (
@@ -367,20 +364,13 @@ def create_chat_router(
                     )
                 )
 
-                # Detect intent (text-only; caption injected)
+                # Detect intent — reuse caption from preflight, no extra LLM call
                 intent = {
                     "route": "rag",
                     "resolved_query": rag_query_from_image or raw_query,
                 }
                 if task_llm is not None and hasattr(task_llm, "detect_intent"):
-                    image_captions: list[str] = []
-                    if hasattr(task_llm, "caption_image"):
-                        images = extract_image_contents(request.messages)
-                        if images:
-                            image_captions = [
-                                await task_llm.caption_image(img, prompts.image_caption_prompt)
-                                for img in images
-                            ]
+                    image_captions: list[str] = [caption] if caption else []
                     intent_s, intent_u = build_intent_prompt(
                         normalized, prompts, image_captions=image_captions
                     )
@@ -526,6 +516,13 @@ def create_chat_router(
                             ],
                         )
                         yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
+
+                # Record final route on the parent LangSmith span
+                try:
+                    if _ls_run is not None:
+                        _ls_run.end(outputs={"route": route, "has_images": bool(processed_images)})
+                except Exception:
+                    pass
 
             total_ms = int((time.monotonic() - t_start) * 1000)
             logger.info(

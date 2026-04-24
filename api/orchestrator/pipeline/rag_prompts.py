@@ -52,7 +52,13 @@ def _message_role(message) -> str:
 
 def _message_content(message) -> str:
     if hasattr(message, "text_content"):
-        return str(message.text_content()).strip()
+        text = str(message.text_content()).strip()
+        # Annotate messages that had images so the LLM retains image context
+        if hasattr(message, "has_images") and message.has_images():
+            n = len(message.image_parts()) if hasattr(message, "image_parts") else 1
+            tag = f"[{n} ảnh đính kèm]"
+            return f"{tag} {text}" if text else tag
+        return text
     if isinstance(message, dict):
         return str(message.get("content", "")).strip()
     return ""

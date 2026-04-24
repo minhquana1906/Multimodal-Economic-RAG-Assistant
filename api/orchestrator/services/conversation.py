@@ -53,3 +53,16 @@ def extract_image_contents(messages: Iterable[Message]) -> list[str]:
                 # Latest user message is found and it's text-only
                 return []
     return []
+
+
+def find_recent_user_images(messages: Iterable[Message]) -> list[ImageContentPart]:
+    """Return image parts from the most recent user message that has images.
+
+    Unlike extract_latest_user_images, this searches back through ALL user
+    messages — useful for follow-up questions that reference a previously
+    attached image.
+    """
+    for message in reversed(normalize_messages(list(messages))):
+        if message.role == "user" and message.has_images():
+            return message.image_parts()
+    return []
