@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from orchestrator.models.schemas import Message
-
-
-def _content_to_text(message: Message) -> str:
-    return message.text_content().strip()
+from orchestrator.models.schemas import ImageContentPart, Message
 
 
 def normalize_messages(messages: Iterable[Message]) -> list[Message]:
@@ -14,23 +10,36 @@ def normalize_messages(messages: Iterable[Message]) -> list[Message]:
     for message in messages:
         if not isinstance(message, Message):
             message = Message.model_validate(message)
-        content = _content_to_text(message)
-        if not content:
+        has_text = bool(message.text_content().strip())
+        has_images = message.has_images()
+        if not has_text and not has_images:
             continue
-        normalized.append(Message(role=message.role, content=content))
+        if has_text and not has_images:
+            # Text-only: collapse to string (preserve existing behaviour)
+            normalized.append(Message(role=message.role, content=message.text_content().strip()))
+        else:
+            # Has images (with or without text): preserve full content list
+            normalized.append(message)
     return normalized
 
 
 def extract_latest_user_query(messages: Iterable[Message]) -> str:
-    for message in reversed(normalize_messages(messages)):
+    for message in reversed(normalize_messages(list(messages))):
         if message.role == "user":
-            return _content_to_text(message)
+            return message.text_content().strip()
     return ""
+
+
+def extract_latest_user_images(messages: Iterable[Message]) -> list[ImageContentPart]:
+    """Return image parts from the most recent user message, or []."""
+    for message in reversed(normalize_messages(list(messages))):
+        if message.role == "user":
+            return message.image_parts()
+    return []
 
 
 def extract_image_contents(messages: Iterable[Message]) -> list[str]:
     """Return image URLs from the latest user message's content parts."""
-    from orchestrator.models.schemas import ImageContentPart
     validated = [m if isinstance(m, Message) else Message.model_validate(m) for m in messages]
     for message in reversed(validated):
         if message.role == "user":

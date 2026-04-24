@@ -14,6 +14,11 @@ class TextContentPart(BaseModel):
 
 class ImageUrl(BaseModel):
     url: str
+    detail: Literal["auto", "low", "high"] = "auto"
+
+
+# Alias for backwards compatibility with multimodal/images branch code
+ImageURL = ImageUrl
 
 
 class ImageContentPart(BaseModel):
@@ -39,6 +44,19 @@ class Message(BaseModel):
         return "".join(
             part.text for part in self.content if isinstance(part, TextContentPart)
         )
+
+    def image_parts(self) -> list[ImageContentPart]:
+        if isinstance(self.content, list):
+            return [p for p in self.content if isinstance(p, ImageContentPart)]
+        return []
+
+    def has_images(self) -> bool:
+        return bool(self.image_parts())
+
+    def to_openai_content(self) -> str | list[dict]:
+        if isinstance(self.content, str):
+            return self.content
+        return [part.model_dump() for part in self.content]
 
 
 class ChatRequest(BaseModel):

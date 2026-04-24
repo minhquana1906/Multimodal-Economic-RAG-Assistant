@@ -18,8 +18,7 @@ dependencies = [
     "langgraph==1.1.3",
     "loguru>=0.7.0",
     "anyio>=4.0",
-    "autoawq>=0.2.9",
-    "autoawq-kernels>=0.0.9",
+    "pillow>=11.0.0",
     "transformers>=5.5.4",
     "huggingface-hub>=1.7.2",
     "accelerate>=1.13.0",
@@ -38,3 +37,5 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-httpx>=0.35.0",
 ]
+  # quantize: use scripts/requirements-quantize.txt in a separate venv
+  # (llmcompressor pins accelerate<=1.12.0 which conflicts with main deps)

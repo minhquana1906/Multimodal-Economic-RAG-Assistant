@@ -22,10 +22,11 @@ GRAY  := \033[0;90m
 .PHONY: help \
         start stop \
         setup pull build push \
-        bootstrap bootstrap-docker snapshot-restore \
+        snapshot-restore \
         up down restart logs ps \
         dev dev-stop dev-build dev-logs dev-ps \
         test test-integration \
+        quantize-setup quantize-vlm quantize-vlm-fp8 \
         _require-env _dev-cache _qdrant-wait _snapshot-restore-curl
 
 # ─── Default ──────────────────────────────────────────────────────────────────
@@ -41,8 +42,6 @@ help:
 	@printf "  make push                 Push images to Docker Hub\n\n"
 	@printf "$(CYAN)Data$(RESET)\n"
 	@printf "  make snapshot-restore     Upload data/*.snapshot → Qdrant  (needs uv)\n"
-	@printf "  make bootstrap            Create collection + indexes locally (needs uv)\n"
-	@printf "  make bootstrap-docker     Same, but runs inside the orchestrator container\n\n"
 	@printf "$(CYAN)Runtime$(RESET)\n"
 	@printf "  make up      [SERVICE]    Start services\n"
 	@printf "  make down    [SERVICE]    Stop services\n"
@@ -57,6 +56,10 @@ help:
 	@printf "$(CYAN)Tests$(RESET)\n"
 	@printf "  make test                 Unit tests\n"
 	@printf "  make test-integration     Integration tests\n\n"
+	@printf "$(CYAN)Quantization$(RESET)\n"
+	@printf "  make quantize-setup       Create .venv-quantize (run once on vast.ai)\n"
+	@printf "  make quantize-vlm [ARGS]  Quantize Qwen3.5-4B with W4A16 GPTQ (llm-compressor)\n"
+	@printf "  make quantize-vlm-fp8     Quantize with FP8-dynamic (data-free, safer fallback)\n\n"
 	@printf "$(GRAY)Variables: DOCKERHUB_NAMESPACE=$(DOCKERHUB_NAMESPACE)  IMAGE_TAG=$(IMAGE_TAG)  QDRANT_URL=$(QDRANT_URL)$(RESET)\n"
 
 # ─── E2E (Docker-only, no uv required) ───────────────────────────────────────
@@ -70,8 +73,6 @@ start: _require-env pull
 		printf "$(GREEN)►$(RESET) Snapshot found — restoring...\n"; \
 		$(MAKE) _snapshot-restore-curl; \
 	fi
-	@printf "$(GREEN)►$(RESET) Restore snapshot...\n"
-	@$(MAKE) snapshot-restore
 	@printf "$(GREEN)►$(RESET) Starting all services...\n"
 	@$(COMPOSE) up -d
 	@printf "$(BOLD)$(GREEN)✓ Stack is up$(RESET) — open http://localhost:8080\n"
@@ -105,13 +106,6 @@ push:
 ## Requires uv — use on dev machines or CI
 snapshot-restore:
 	SERVICES__QDRANT_URL=$(QDRANT_URL) uv run python scripts/qdrant_snapshot_restore.py
-
-bootstrap:
-	SERVICES__QDRANT_URL=$(QDRANT_URL) uv run python scripts/qdrant_bootstrap.py
-
-## Runs inside orchestrator container — no local Python needed
-bootstrap-docker:
-	$(COMPOSE) --profile tools run --rm bootstrap
 
 # ─── Runtime ──────────────────────────────────────────────────────────────────
 
@@ -154,6 +148,25 @@ test:
 
 test-integration:
 	uv run pytest -m integration
+
+# ─── Quantization (runs on vast.ai RTX 3090 or local GPU) ────────────────────
+
+## W4A16 GPTQ (primary). Runs in .venv-quantize (separate from main env due to dep conflicts).
+## Setup once: python3 -m venv .venv-quantize && .venv-quantize/bin/pip install -r scripts/requirements-quantize.txt
+## Usage: make quantize-vlm ARGS="--push-to-hub --hub-id <namespace>/Qwen3.5-4B-W4A16"
+quantize-vlm:
+	.venv-quantize/bin/python scripts/quantize_llmcompressor.py --scheme w4a16 $(ARGS)
+
+## FP8 dynamic (data-free, always works on Qwen MoE).
+quantize-vlm-fp8:
+	.venv-quantize/bin/python scripts/quantize_llmcompressor.py --scheme fp8-dynamic $(ARGS)
+
+## Bootstrap quantize venv (run once on vast.ai before quantize-vlm).
+quantize-setup:
+	python3 -m venv .venv-quantize
+	.venv-quantize/bin/pip install --upgrade pip
+	.venv-quantize/bin/pip install -r scripts/requirements-quantize.txt
+	@printf "$(GREEN)✓$(RESET) quantize venv ready — run $(BOLD)make quantize-vlm$(RESET)\n"
 
 # ─── Internal ─────────────────────────────────────────────────────────────────
 

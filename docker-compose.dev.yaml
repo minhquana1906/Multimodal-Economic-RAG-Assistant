@@ -2,7 +2,7 @@ x-hf-cache-env: &hf-cache-env
     HF_HOME: /data/huggingface
     HUGGINGFACE_HUB_CACHE: /data/huggingface/hub
 
-x-hf-cache-volume: &hf-cache-volume ./.cache/huggingface:/data/huggingface
+x-hf-cache-volume: &hf-cache-volume ~/.cache/huggingface:/data/huggingface
 
 x-gpu-reservation: &gpu-reservation
     deploy:
@@ -169,7 +169,7 @@ services:
                 condition: service_healthy
         profiles:
             - ingest
-    
+
     llm:
         <<: *gpu-reservation
         image: vllm/vllm-openai:v0.18.0-x86_64-cu130
@@ -180,6 +180,7 @@ services:
         environment:
             HF_TOKEN: ${HF_TOKEN}
             VLLM_WORKER_MULTIPROC_METHOD: spawn
+            <<: *hf-cache-env
         volumes:
             - *hf-cache-volume
         command:
@@ -193,18 +194,21 @@ services:
             - --gpu-memory-utilization
             - ${VLLM__GPU_MEMORY_UTILIZATION:-0.75}
             - --dtype
-            - ${VLLM__DTYPE:-half}
+            - ${VLLM__DTYPE:-bfloat16} # bfloat16 required for Qwen3.5-4B MoE
             - --max-model-len
-            - ${VLLM__MAX_MODEL_LEN:-4096}
+            - ${VLLM__MAX_MODEL_LEN:-32768}
             - --max-num-batched-tokens
             - ${VLLM__MAX_NUM_BATCHED_TOKENS:-2048}
             - --max-num-seqs
             - ${VLLM__MAX_NUM_SEQS:-4}
             - --kv-cache-dtype
             - ${VLLM__KV_CACHE_DTYPE:-auto}
+            - --limit-mm-per-prompt
+            - "{\"image\":4,\"video\":0}" # multimodal: up to 4 images per request
+            - --trust-remote-code # required for Qwen3.5-4B Gated DeltaNet
             - --enable-prefix-caching
-            - --quantization
-            - ${VLLM__QUANTIZATION:-compressed-tensors}
+            # - --quantization
+            # - ${VLLM__QUANTIZATION:-compressed-tensors}
         networks:
             - rag-net
         healthcheck:

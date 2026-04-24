@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,6 +14,11 @@ class LLMConfig(BaseModel):
     max_tokens: int
     timeout: float
     api_key: str = ""
+    enable_vision: bool = True
+    max_image_pixels: int = 1_048_576
+    max_image_bytes: int = 4_000_000
+    image_detail: Literal["auto", "low", "high"] = "auto"
+    max_images_per_turn: int = 4
 
 
 class ServicesConfig(BaseModel):
@@ -120,6 +126,17 @@ class PromptsConfig(BaseModel):
         "Nếu hình ảnh chứa dữ liệu kinh tế, tài chính, biểu đồ thị trường hoặc chỉ số tài chính, "
         "hãy nhấn mạnh điều đó. "
         "Nếu không liên quan đến kinh tế hoặc tài chính, mô tả nội dung thực tế."
+    )
+    image_caption_system_prompt: str = (
+        "Bạn là mô-đun trích xuất ý nghĩa hình ảnh cho hệ thống RAG kinh tế - tài chính.\n"
+        "Chỉ trả về JSON hợp lệ duy nhất với 2 khóa: caption và rag_query.\n"
+        "caption: mô tả ngắn gọn 1-2 câu về nội dung ảnh (số liệu, biểu đồ, bảng, văn bản).\n"
+        "rag_query: 1 truy vấn tiếng Việt súc tích để tra cứu thông tin kinh tế liên quan trong cơ sở dữ liệu."
+    )
+    image_caption_user_template: str = (
+        "Yêu cầu của người dùng: {user_text}\n\n"
+        "Hãy phân tích ảnh kèm theo và trả về JSON:\n"
+        '{{\"caption\": \"mô tả 1-2 câu\", \"rag_query\": \"truy vấn tiếng Việt\"}}'
     )
 
 

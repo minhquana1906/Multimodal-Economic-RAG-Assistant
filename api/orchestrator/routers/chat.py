@@ -33,7 +33,13 @@ from orchestrator.pipeline.rag_prompts import (
     build_intent_prompt,
     resolve_rag_system_prompt,
 )
-from orchestrator.services.conversation import extract_image_contents, extract_latest_user_query, normalize_messages
+from orchestrator.services import vision as _vision
+from orchestrator.services.conversation import (
+    extract_image_contents,
+    extract_latest_user_images,
+    extract_latest_user_query,
+    normalize_messages,
+)
 from orchestrator.tracing import log_phase
 
 
@@ -41,12 +47,16 @@ def _build_initial_state(
     *,
     raw_query: str,
     resolved_query: str,
+    image_parts: list | None = None,
+    image_caption: str = "",
 ) -> RAGState:
     return {
         "query": raw_query,
         "raw_query": raw_query,
         "resolved_query": resolved_query,
         "task_type": "rag",
+        "image_parts": image_parts or [],
+        "image_caption": image_caption,
         "embeddings": [],
         "retrieved_docs": [],
         "reranked_docs": [],
@@ -58,6 +68,53 @@ def _build_initial_state(
         "citation_pool": {},
         "error": None,
     }
+
+
+async def _preflight_image(
+    *,
+    llm,
+    image_parts: list,
+    raw_query: str,
+    prompts: "PromptsConfig",
+    vision_cfg,
+) -> tuple[list[dict], str, str]:
+    """Resize/validate images and get caption + rag_query via MLLM.
+
+    Returns (processed_image_dicts, caption, rag_query).
+    Returns ([], "", raw_query) when no images or vision is disabled.
+    """
+    if not image_parts or llm is None:
+        return [], "", raw_query
+    if vision_cfg is not None and not getattr(vision_cfg, "enable_vision", True):
+        return [], "", raw_query
+
+    max_imgs = getattr(vision_cfg, "max_images_per_turn", 4) if vision_cfg else 4
+    max_pixels = (
+        getattr(vision_cfg, "max_image_pixels", 1_048_576) if vision_cfg else 1_048_576
+    )
+    max_bytes = (
+        getattr(vision_cfg, "max_image_bytes", 4_000_000) if vision_cfg else 4_000_000
+    )
+
+    capped = image_parts[:max_imgs]
+    processed = [
+        await _vision.process_image_part(p, max_pixels=max_pixels, max_bytes=max_bytes)
+        for p in capped
+    ]
+
+    system_prompt = getattr(prompts, "image_caption_system_prompt", "")
+    user_template = getattr(
+        prompts,
+        "image_caption_user_template",
+        'Phân tích ảnh. Trả JSON: {{"caption": "...", "rag_query": "..."}}. Yêu cầu: {user_text}',
+    )
+    desc = await llm.describe_image(
+        user_text=raw_query,
+        image_content_parts=processed,
+        system_prompt=system_prompt,
+        user_template=user_template,
+    )
+    return processed, desc.get("caption", ""), desc.get("rag_query", "") or raw_query
 
 
 @traceable(name="Execute Chat Turn")
@@ -74,11 +131,26 @@ async def execute_chat_turn(
     prompts = prompts or PromptsConfig()
     normalized = normalize_messages(messages)
     raw_query = extract_latest_user_query(normalized)
+    image_parts_raw = extract_latest_user_images(normalized)
 
-    if not raw_query:
+    # Allow image-only messages
+    if not raw_query and image_parts_raw:
+        raw_query = "Phân tích nội dung ảnh này"
+
+    if not raw_query and not image_parts_raw:
         return {"answer": "", "citations": [], "task_type": "rag", "resolved_query": ""}
 
-    intent = {"route": "rag", "resolved_query": raw_query}
+    # Vision preflight: resize images + get caption/rag_query
+    vision_cfg = getattr(settings, "llm", None) if settings else None
+    processed_images, caption, rag_query_from_image = await _preflight_image(
+        llm=llm,
+        image_parts=image_parts_raw,
+        raw_query=raw_query,
+        prompts=prompts,
+        vision_cfg=vision_cfg,
+    )
+
+    intent = {"route": "rag", "resolved_query": rag_query_from_image or raw_query}
     if llm is not None and hasattr(llm, "detect_intent"):
         image_captions: list[str] = []
         if hasattr(llm, "caption_image"):
@@ -94,17 +166,21 @@ async def execute_chat_turn(
         intent = await llm.detect_intent(
             system_prompt=intent_system_prompt,
             user_prompt=intent_user_prompt,
-            fallback_query=raw_query,
+            fallback_query=rag_query_from_image or raw_query,
         )
 
     route = intent.get("route", "rag")
-    resolved_query = intent.get("resolved_query") or raw_query
-    logger.info(f"route_decided route={route} resolved_query_len={len(resolved_query)}")
+    resolved_query = intent.get("resolved_query") or rag_query_from_image or raw_query
+    logger.info(
+        f"route_decided route={route} resolved_query_len={len(resolved_query)} has_images={bool(processed_images)}"
+    )
 
     if route == "direct" and llm is not None:
         use_web, web_reason = (False, "disabled")
         if web_search is not None and settings is not None:
-            use_web, web_reason = should_use_web_search_for_direct(resolved_query, settings)
+            use_web, web_reason = should_use_web_search_for_direct(
+                resolved_query, settings
+            )
 
         if use_web:
             logger.info(f"direct_web_search=true reason={web_reason}")
@@ -134,7 +210,9 @@ async def execute_chat_turn(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                 )
-                context_limit = getattr(getattr(settings, "rag", None), "context_limit", 10)
+                context_limit = getattr(
+                    getattr(settings, "rag", None), "context_limit", 10
+                )
                 pseudo_state = {
                     "answer": answer,
                     "final_context": web_context,
@@ -159,10 +237,17 @@ async def execute_chat_turn(
             resolved_query=resolved_query,
             prompts=prompts,
         )
-        answer = await llm.generate(
-            system_prompt=prompts.direct_system_prompt,
-            user_prompt=direct_user_prompt,
-        )
+        if processed_images and hasattr(llm, "generate_with_images"):
+            answer = await llm.generate_with_images(
+                system_prompt=prompts.direct_system_prompt,
+                user_text=direct_user_prompt,
+                image_content_parts=processed_images,
+            )
+        else:
+            answer = await llm.generate(
+                system_prompt=prompts.direct_system_prompt,
+                user_prompt=direct_user_prompt,
+            )
         return {
             "answer": answer,
             "citations": [],
@@ -173,7 +258,12 @@ async def execute_chat_turn(
     # rag route
     async with log_phase("rag_graph") as ctx:
         result = await rag_graph.ainvoke(
-            _build_initial_state(raw_query=raw_query, resolved_query=resolved_query)
+            _build_initial_state(
+                raw_query=raw_query,
+                resolved_query=resolved_query,
+                image_parts=processed_images,
+                image_caption=caption,
+            )
         )
         ctx["citations"] = len(result.get("citations", []))
     return {
@@ -198,8 +288,10 @@ def create_chat_router(
 
     @router.post("/v1/chat/completions")
     async def chat_completions(request: ChatRequest):
-        user_message = extract_latest_user_query(request.messages)
-        if not user_message:
+        normalized_msgs = normalize_messages(request.messages)
+        user_message = extract_latest_user_query(normalized_msgs)
+        user_images = extract_latest_user_images(normalized_msgs)
+        if not user_message and not user_images:
             raise HTTPException(status_code=400, detail="No user message found")
 
         request_id = str(uuid.uuid4())[:8]
@@ -229,21 +321,26 @@ def create_chat_router(
             )
             return ChatResponse(
                 model=request.model,
-                choices=[ChatCompletionChoice(message=AssistantMessage(content=answer))],
+                choices=[
+                    ChatCompletionChoice(message=AssistantMessage(content=answer))
+                ],
             )
 
     def _stream_response(request: ChatRequest, t_start: float):
         normalized = normalize_messages(request.messages)
         raw_query = extract_latest_user_query(normalized)
+        image_parts_raw = extract_latest_user_images(normalized)
+        if not raw_query and image_parts_raw:
+            raw_query = "Phân tích nội dung ảnh này"
         route = "rag"
 
         async def generate():
             nonlocal route
 
-            # Wrap the entire streaming flow (detection + retrieval + generation)
-            # under one LangSmith parent span so all child runs appear nested.
+            # Wrap the entire streaming flow under one LangSmith parent span.
             try:
                 from langsmith import trace as _ls_trace
+
                 ls_ctx = _ls_trace(
                     "Stream Chat Turn",
                     run_type="chain",
@@ -251,14 +348,30 @@ def create_chat_router(
                 )
             except Exception:
                 import contextlib
+
                 ls_ctx = contextlib.nullcontext()
 
             stream_messages: list[dict] = []
             citation_suffix = ""
 
             async with ls_ctx:
-                # Detect intent
-                intent = {"route": "rag", "resolved_query": raw_query}
+                # Vision preflight
+                vision_cfg = getattr(settings, "llm", None) if settings else None
+                processed_images, caption, rag_query_from_image = (
+                    await _preflight_image(
+                        llm=task_llm,
+                        image_parts=image_parts_raw,
+                        raw_query=raw_query,
+                        prompts=prompts,
+                        vision_cfg=vision_cfg,
+                    )
+                )
+
+                # Detect intent (text-only; caption injected)
+                intent = {
+                    "route": "rag",
+                    "resolved_query": rag_query_from_image or raw_query,
+                }
                 if task_llm is not None and hasattr(task_llm, "detect_intent"):
                     image_captions: list[str] = []
                     if hasattr(task_llm, "caption_image"):
@@ -274,12 +387,21 @@ def create_chat_router(
                     intent = await task_llm.detect_intent(
                         system_prompt=intent_s,
                         user_prompt=intent_u,
-                        fallback_query=raw_query,
+                        fallback_query=rag_query_from_image or raw_query,
                     )
 
                 route = intent.get("route", "rag")
-                resolved_query = intent.get("resolved_query") or raw_query
-                logger.info(f"route_decided route={route} resolved_query_len={len(resolved_query)}")
+                resolved_query = (
+                    intent.get("resolved_query") or rag_query_from_image or raw_query
+                )
+                logger.info(
+                    f"route_decided route={route} resolved_query_len={len(resolved_query)} has_images={bool(processed_images)}"
+                )
+
+                def _user_content(text: str) -> "str | list":
+                    if not processed_images:
+                        return text
+                    return list(processed_images) + [{"type": "text", "text": text}]
 
                 if route == "direct":
                     use_web, web_reason = (False, "disabled")
@@ -314,10 +436,15 @@ def create_chat_router(
                             context_limit = getattr(
                                 getattr(settings, "rag", None), "context_limit", 10
                             )
-                            citation_suffix = build_citation_section(web_context, context_limit)
+                            citation_suffix = build_citation_section(
+                                web_context, context_limit
+                            )
                             stream_messages = [
-                                {"role": "system", "content": resolve_rag_system_prompt(prompts)},
-                                {"role": "user", "content": user_prompt},
+                                {
+                                    "role": "system",
+                                    "content": resolve_rag_system_prompt(prompts),
+                                },
+                                {"role": "user", "content": _user_content(user_prompt)},
                             ]
                             route = "direct_web"
                         else:
@@ -332,7 +459,10 @@ def create_chat_router(
                         )
                         stream_messages = [
                             {"role": "system", "content": prompts.direct_system_prompt},
-                            {"role": "user", "content": direct_user_prompt},
+                            {
+                                "role": "user",
+                                "content": _user_content(direct_user_prompt),
+                            },
                         ]
 
                 else:
@@ -340,11 +470,16 @@ def create_chat_router(
                     async with log_phase("retrieval_graph") as ctx:
                         retrieval_state = await retrieval_graph.ainvoke(
                             _build_initial_state(
-                                raw_query=raw_query, resolved_query=resolved_query
+                                raw_query=raw_query,
+                                resolved_query=resolved_query,
+                                image_parts=processed_images,
+                                image_caption=caption,
                             )
                         )
                         ctx["web_results"] = len(retrieval_state.get("web_results", []))
-                        ctx["context_items"] = len(retrieval_state.get("final_context", []))
+                        ctx["context_items"] = len(
+                            retrieval_state.get("final_context", [])
+                        )
 
                     final_context = retrieval_state.get("final_context", [])
                     if settings is not None:
@@ -362,7 +497,7 @@ def create_chat_router(
                     system_prompt = resolve_rag_system_prompt(prompts)
                     stream_messages = [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
+                        {"role": "user", "content": _user_content(user_prompt)},
                     ]
 
                 # Stream LLM response — stream_chat is @traceable, becomes child span
@@ -373,19 +508,29 @@ def create_chat_router(
                         is_first = False
                         chunk = ChatStreamChunk(
                             model=request.model,
-                            choices=[ChatStreamChoice(delta=ChatDelta(role=role, content=delta))],
+                            choices=[
+                                ChatStreamChoice(
+                                    delta=ChatDelta(role=role, content=delta)
+                                )
+                            ],
                         )
                         yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
 
                     if citation_suffix:
                         cite_chunk = ChatStreamChunk(
                             model=request.model,
-                            choices=[ChatStreamChoice(delta=ChatDelta(content=citation_suffix))],
+                            choices=[
+                                ChatStreamChoice(
+                                    delta=ChatDelta(content=citation_suffix)
+                                )
+                            ],
                         )
                         yield f"data: {cite_chunk.model_dump_json(exclude_none=True)}\n\n"
 
             total_ms = int((time.monotonic() - t_start) * 1000)
-            logger.info(f"request_completed route={route} total_ms={total_ms} stream=true")
+            logger.info(
+                f"request_completed route={route} total_ms={total_ms} stream=true"
+            )
 
             stop_chunk = ChatStreamChunk(
                 model=request.model,

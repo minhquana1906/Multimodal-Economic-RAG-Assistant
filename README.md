@@ -229,7 +229,6 @@ Final answer:    "GDP tăng 6.5% [[S1]](https://...) nhờ xuất khẩu mạnh 
 ├── scripts/
 │   ├── ingest.py                    # HuggingFace dataset → Qdrant
 │   ├── chunker.py                   # Semantic chunking
-│   ├── qdrant_bootstrap.py          # Create collection + vector indexes
 │   └── qdrant_snapshot_restore.py   # Restore from .snapshot file
 │
 ├── infra/docker/
@@ -254,7 +253,6 @@ Final answer:    "GDP tăng 6.5% [[S1]](https://...) nhờ xuất khẩu mạnh 
 | `llm` |  | GPU 1 | vLLM OpenAI-compatible endpoint (Rented in Vast.ai) |
 | `qdrant` | 6333 / 6334 | — | Vector database (REST / gRPC) |
 | `webui` | 8080 | — | Open WebUI chat interface |
-| `bootstrap` | — | — | One-off: create Qdrant collection (profile: `tools`) |
 | `ingest` | — | — | One-off: load data into Qdrant (profile: `ingest`) |
 | `tunnel` | — | — | Cloudflare tunnel (optional) |
 
@@ -495,7 +493,6 @@ make dev-stop
 | `make ps` | Show container status |
 | `make test` | Run unit tests |
 | `make test-integration` | Run integration tests |
-| `make bootstrap` | Create Qdrant collection locally |
 | `make snapshot-restore` | Restore Qdrant from .snapshot |
 | `make build` | Build Docker images locally |
 | `make push` | Push images to Docker Hub |
@@ -562,7 +559,7 @@ uv run pytest tests/orchestrator/test_regression_matrix.py -m integration
 ### No retrieval results
 
 - Confirm Qdrant collection exists: `curl http://localhost:6333/collections`.
-- Run `make bootstrap` then `make ingest` (or `make snapshot-restore`).
+- Run `make snapshot-restore` to restore data if collection is empty or corrupted.
 
 ### Re-ingestion fails / collection conflicts
 

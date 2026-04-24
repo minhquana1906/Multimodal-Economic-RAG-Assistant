@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
 from langsmith import traceable
 from loguru import logger
@@ -151,6 +152,70 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Image captioning error: {e}")
             return ""
+
+    async def describe_image(
+        self,
+        user_text: str,
+        image_content_parts: list[dict],
+        *,
+        system_prompt: str,
+        user_template: str,
+    ) -> dict:
+        """Return {"caption": "...", "rag_query": "..."} from MLLM analysis of image(s)."""
+        prompt = user_template.format(user_text=user_text or "Mô tả ảnh này.")
+        user_content: list[Any] = list(image_content_parts) + [
+            {"type": "text", "text": prompt}
+        ]
+        try:
+            content, _, _ = await self._create_completion(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=256,
+            )
+            raw = (content or "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            parsed = json.loads(raw)
+            return {
+                "caption": str(parsed.get("caption", "")),
+                "rag_query": str(parsed.get("rag_query", "") or user_text),
+            }
+        except Exception as e:
+            logger.warning(f"describe_image failed: {e}")
+            return {"caption": "", "rag_query": user_text}
+
+    @traceable(name="Generate Answer (MM)", run_type="llm")
+    async def generate_with_images(
+        self,
+        *,
+        system_prompt: str,
+        user_text: str,
+        image_content_parts: list[dict],
+    ) -> str:
+        """Generate response with image(s) + text using the multimodal LLM."""
+        user_content: list[Any] = list(image_content_parts) + [
+            {"type": "text", "text": user_text}
+        ]
+        try:
+            content, tokens, latency_ms = await self._create_completion(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ]
+            )
+            logger.log(
+                "LLM",
+                f"model={self._model} tokens={tokens} latency_ms={latency_ms} task=multimodal",
+            )
+            return content or ""
+        except Exception as e:
+            logger.error(f"Multimodal LLM generation error: {e}")
+            return "Xin lỗi, không thể tạo phản hồi."
 
     @traceable(name="Stream Answer", run_type="llm")
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
