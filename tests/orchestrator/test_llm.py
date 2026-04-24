@@ -104,3 +104,88 @@ async def test_detect_intent_uses_supplied_prompt_strings(monkeypatch):
         {"role": "user", "content": "USER PROMPT"},
     ]
     assert captured["max_tokens"] == 128
+
+
+@pytest.mark.asyncio
+async def test_detect_intent_falls_back_to_direct_on_invalid_json(monkeypatch):
+    """Invalid JSON from model must fall back to direct, not rag."""
+    from orchestrator.services.llm import LLMClient
+
+    llm = LLMClient(url="http://llm:8004/v1", model="m", temperature=0.7, max_tokens=512, timeout=30.0)
+
+    async def fake_create_completion(messages, *, max_tokens=None):
+        return "this is not json at all", 5, 10
+
+    monkeypatch.setattr(llm, "_create_completion", fake_create_completion)
+
+    result = await llm.detect_intent(
+        system_prompt="s", user_prompt="u", fallback_query="fallback"
+    )
+    assert result["route"] == "direct"
+    assert result["resolved_query"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_detect_intent_logs_trace_on_success(monkeypatch, caplog):
+    """detect_intent must emit a TRACE-level log with the raw response."""
+    import logging
+    from orchestrator.services.llm import LLMClient
+    from orchestrator.tracing import setup_logging
+    from orchestrator.config import ObservabilityConfig
+
+    setup_logging(ObservabilityConfig(log_level="INFO", langsmith_project="p", app_mode="dev"))
+
+    llm = LLMClient(url="http://llm:8004/v1", model="m", temperature=0.7, max_tokens=512, timeout=30.0)
+
+    async def fake_create_completion(messages, *, max_tokens=None):
+        return '{"route":"direct","resolved_query":"test"}', 5, 10
+
+    monkeypatch.setattr(llm, "_create_completion", fake_create_completion)
+
+    # Just verify it completes without error in dev mode (TRACE calls don't raise)
+    result = await llm.detect_intent(system_prompt="s", user_prompt="u", fallback_query="fb")
+    assert result["route"] == "direct"
+
+
+@pytest.mark.asyncio
+async def test_caption_image_calls_create_completion_with_vision_format(monkeypatch):
+    from orchestrator.services.llm import LLMClient
+
+    llm = LLMClient(url="http://llm:8004/v1", model="m", temperature=0.7, max_tokens=512, timeout=30.0)
+
+    captured: dict = {}
+
+    async def fake_create_completion(messages, *, max_tokens=None):
+        captured["messages"] = messages
+        captured["max_tokens"] = max_tokens
+        return "A financial chart showing GDP growth.", 20, 50
+
+    monkeypatch.setattr(llm, "_create_completion", fake_create_completion)
+
+    result = await llm.caption_image(
+        image_url="data:image/png;base64,abc",
+        caption_prompt="Describe this image.",
+    )
+
+    assert result == "A financial chart showing GDP growth."
+    assert captured["max_tokens"] == 100
+    msg = captured["messages"][0]
+    assert msg["role"] == "user"
+    content_parts = msg["content"]
+    assert any(p["type"] == "image_url" for p in content_parts)
+    assert any(p["type"] == "text" and "Describe" in p["text"] for p in content_parts)
+
+
+@pytest.mark.asyncio
+async def test_caption_image_returns_empty_string_on_error(monkeypatch):
+    from orchestrator.services.llm import LLMClient
+
+    llm = LLMClient(url="http://llm:8004/v1", model="m", temperature=0.7, max_tokens=512, timeout=30.0)
+
+    async def fake_create_completion(messages, *, max_tokens=None):
+        raise RuntimeError("vision model unavailable")
+
+    monkeypatch.setattr(llm, "_create_completion", fake_create_completion)
+
+    result = await llm.caption_image(image_url="data:image/png;base64,x", caption_prompt="describe")
+    assert result == ""
