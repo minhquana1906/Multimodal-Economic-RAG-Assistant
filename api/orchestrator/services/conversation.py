@@ -26,3 +26,20 @@ def extract_latest_user_query(messages: Iterable[Message]) -> str:
         if message.role == "user":
             return _content_to_text(message)
     return ""
+
+
+def extract_image_contents(messages: Iterable[Message]) -> list[str]:
+    """Return image URLs from the latest user message's content parts."""
+    from orchestrator.models.schemas import ImageContentPart
+    for message in reversed(list(messages)):
+        if message.role == "user":
+            if isinstance(message.content, list):
+                return [
+                    part.image_url.url
+                    for part in message.content
+                    if isinstance(part, ImageContentPart)
+                ]
+            else:
+                # Latest user message is found and it's text-only
+                return []
+    return []
