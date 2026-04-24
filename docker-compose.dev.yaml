@@ -194,7 +194,7 @@ services:
             - --gpu-memory-utilization
             - ${VLLM__GPU_MEMORY_UTILIZATION:-0.75}
             - --dtype
-            - ${VLLM__DTYPE:-bfloat16} # bfloat16 required for Qwen3.5-4B MoE
+            - ${VLLM__DTYPE:-bfloat16}
             - --max-model-len
             - ${VLLM__MAX_MODEL_LEN:-32768}
             - --max-num-batched-tokens
@@ -204,11 +204,14 @@ services:
             - --kv-cache-dtype
             - ${VLLM__KV_CACHE_DTYPE:-auto}
             - --limit-mm-per-prompt
-            - "{\"image\":4,\"video\":0}" # multimodal: up to 4 images per request
-            - --trust-remote-code # required for Qwen3.5-4B Gated DeltaNet
+            - "{\"image\":4,\"video\":0}"
+            - --trust-remote-code
             - --enable-prefix-caching
             # - --quantization
             # - ${VLLM__QUANTIZATION:-compressed-tensors}
+        depends_on:
+            inference:
+                condition: service_healthy
         networks:
             - rag-net
         healthcheck:
